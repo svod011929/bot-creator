@@ -95,11 +95,13 @@ class Config:
 
     @property
     def piarflow_enabled(self) -> bool:
-        return bool(self.piarflow_token)
+        from creator.sponsor_sources import configured
+        return configured(self, "piarflow")
 
     @property
     def tgrass_enabled(self) -> bool:
-        return bool(self.tgrass_factory_token)
+        from creator.sponsor_sources import configured
+        return configured(self, "tgrass")
 
     @property
     def lavepay_enabled(self) -> bool:

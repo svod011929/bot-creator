@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import aiohttp
 
 from creator.db import now
+from creator.sponsor_sources import SourceError, SourceStore, atomic_object
 
 if TYPE_CHECKING:  # pragma: no cover
     from creator.services import Ctx
@@ -131,6 +132,7 @@ class TGrassService:
         self.client = client
         self.notify = notify
         self._hub_key: str | None = None
+        self._hub_lock = asyncio.Lock()
 
     @property
     def db(self):
@@ -169,31 +171,28 @@ class TGrassService:
     def _write_hub_file(self, api_key: str) -> None:
         path = self.hub_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"api_key": api_key}, ensure_ascii=False), encoding="utf-8")
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+        atomic_object(path, {"api_key": api_key})
 
     async def ensure_hub_key(self) -> str:
-        """auth_token хаб-бота креатора для режима трансляции. Не логирует ключ."""
-        if self._hub_key:
-            return self._hub_key
-        key = (self.ctx.cfg.tgrass_hub_api_key or "").strip()
-        if not key:
-            key = str(self._read_hub_file().get("api_key") or "").strip()
-        if not key:
-            if not self.ctx.cfg.tgrass_owner_id:
-                raise TGrassError("не задан TGRASS_OWNER_ID для хаб-бота")
-            name = (self.ctx.bot_username or "creator_hub").lstrip("@")
+        """Resolve current precedence, without trusting a stale in-memory key."""
+        async with self._hub_lock:
+            store = SourceStore(self.ctx.cfg, "tgrass")
             try:
+                source = store.resolve()
+                if source.key:
+                    return source.key
+                if not self.ctx.cfg.tgrass_factory_token or not self.ctx.cfg.tgrass_owner_id:
+                    raise TGrassError("Нет ключа источника или данных для регистрации хаба")
+                name = (self.ctx.bot_username or "creator_hub").lstrip("@")
                 key = await self.client.new_bot(self.owner_login(), self.ctx.cfg.tgrass_owner_id, name)
-            except TGrassError as e:
-                raise TGrassError(f"не удалось зарегистрировать хаб-бот: {e.message}", e.status) from e
-            self._write_hub_file(key)
-            log.info("TGrass: хаб-бот зарегистрирован (%s)", name)
-        self._hub_key = key
-        return key
+                # Settings may have changed while registration was awaiting a response.
+                source = store.resolve()
+                if source.key:
+                    return source.key
+                self._write_hub_file(key)
+                return key
+            except SourceError:
+                raise TGrassError("Источник недоступен; проверьте настройки источника") from None
 
     async def approve(self, bot_id: int, admin_id: int) -> None:
         """Одобряет заявку: сначала factory (/new_bot), при любой ошибке — relay (хаб).
@@ -223,13 +222,13 @@ class TGrassService:
             log.info("bot %s снова включён в TGrass mode=%s (админ %s)", bot_id, mode, admin_id)
             return
 
-        if not self.ctx.cfg.tgrass_owner_id:
+        if not self.ctx.cfg.tgrass_factory_token or not self.ctx.cfg.tgrass_owner_id:
             # без owner_id factory невозможна — сразу relay
             factory_err = TGrassError("не задан TGRASS_OWNER_ID")
             try:
                 mode, key, fell_back = "relay", await self.ensure_hub_key(), True
             except TGrassError as hub_e:
-                self.db.tgrass_set(bot_id, error=f"factory: нет TGRASS_OWNER_ID; hub: {hub_e.message[:120]}"[:300])
+                self.db.tgrass_set(bot_id, error="factory: нет данных фабрики; hub: источник недоступен")
                 raise hub_e
         else:
             try:
@@ -237,17 +236,17 @@ class TGrassService:
                                                 (b["username"] or f"bot{bot_id}").lstrip("@"))
             except TGrassError as e:
                 factory_err = e
-                log.info("TGrass: factory failed for bot %s — fallback relay (%s)", bot_id, e.message[:120])
+                log.info("TGrass: factory failed for bot %s — fallback relay (%s)", bot_id, "ошибка сети/API")
                 try:
                     mode, key, fell_back = "relay", await self.ensure_hub_key(), True
                 except TGrassError as hub_e:
-                    self.db.tgrass_set(bot_id, error=f"factory: {e.message[:120]}; hub: {hub_e.message[:120]}"[:300])
+                    self.db.tgrass_set(bot_id, error="factory: ошибка сети/API; hub: источник недоступен")
                     raise hub_e
 
         fields = dict(status="approved", mode=mode, api_key=key, error=None,
                       decided_at=now(), decided_by=admin_id)
         if fell_back and factory_err is not None:
-            fields["error"] = f"factory→relay: {factory_err.message[:200]}"[:300]
+            fields["error"] = "factory→relay: ошибка регистрации"
         self.db.tgrass_set(bot_id, **fields)
         await self.ctx.apply_changes(bot_id)
         log.info("bot %s подключён к TGrass mode=%s%s (админ %s)",

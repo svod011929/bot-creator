@@ -42,6 +42,7 @@ class Ctx:
     tgrass: Any = None  # creator.tgrass.TGrassService, если задан TGRASS_FACTORY_TOKEN
     piarflow: Any = None  # creator.piarflow.PiarFlowService, если задан PIARFLOW_TOKEN
 
+    source_inputs: dict = field(default_factory=dict, repr=False)  # expiring candidate secrets, never FSM/DB
     subscription_checks: dict = field(default_factory=dict)
     bot_lists: dict = field(default_factory=dict)  # bounded ephemeral owner list views, no bot rows/credentials
 
