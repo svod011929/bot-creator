@@ -52,7 +52,7 @@ def app_text(ctx: Ctx, t) -> str:
             f"Владелец: <code>{t['owner_id']}</code> {who}\n"
             f"Пользователей: {users} (на момент заявки {t['users_at_apply']})")
     if t["error"]:
-        text += f"\n⚠️ Последняя ошибка PiarFlow: {html.escape(t['error'])}"
+        text += "\n⚠️ Записана ошибка подключения; причина не проверена."
     return text
 
 
@@ -111,8 +111,8 @@ async def decide(cb: CallbackQuery, ctx: Ctx) -> None:
             return
         try:
             await ctx.piarflow.approve(bot_id, cb.from_user.id)
-        except (PiarFlowError, LookupError) as e:
-            await cb.answer(f"PiarFlow: {str(e)[:150]}", show_alert=True)
+        except (PiarFlowError, LookupError):
+            await cb.answer("PiarFlow: операция не выполнена; проверьте источник и заявку", show_alert=True)
             return
         reward = rub(ctx.piarflow.reward())
         t2 = ctx.db.pf(bot_id)
@@ -121,7 +121,7 @@ async def decide(cb: CallbackQuery, ctx: Ctx) -> None:
                 else "Если PiarFlow отправит бота на модерацию, задания появятся после её прохождения.")
         extra = ""
         if t2 and t2["error"] and str(t2["error"]).startswith("factory→relay"):
-            extra = f"\n⚠️ Фабрика не удалась — включена трансляция.\n<code>{html.escape(str(t2['error'])[:180])}</code>"
+            extra = "\n⚠️ Фабрика не удалась — записано подключение через источник креатора."
         await _edit(cb, f"✅ Бот ID {bot_id} @{html.escape(b['username'] or '')} подключён к PiarFlow "
                         f"[{MODE.get(mode, mode)}].\n{note}{extra}",
                     ikb([btn("🚀 PiarFlow", "a:pf")]))
@@ -226,7 +226,7 @@ async def bot_card(cb: CallbackQuery, ctx: Ctx, bot_id: int) -> None:
         except PiarFlowError as e:
             lines.append(f"PiarFlow: не удалось получить статистику ({html.escape(e.message[:100])})")
     if t["error"]:
-        lines.append(f"⚠️ {html.escape(t['error'])}")
+        lines.append("⚠️ Записана ошибка подключения; причина не проверена.")
     kb = []
     if t["status"] == "approved":
         kb.append([btn("⛔ Отключить задания в боте", f"pf:off:{bot_id}")])

@@ -45,6 +45,7 @@ class UserMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.text in MENU_BUTTONS:
             state: FSMContext | None = data.get("state")
             if state is not None:
+                ctx.source_inputs.pop(user.id, None)
                 await state.clear()
                 data["raw_state"] = None
         return await handler(event, data)
@@ -54,6 +55,7 @@ class UserMiddleware(BaseMiddleware):
 async def start(message: Message, command: CommandObject, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(message.from_user.id, None)
+    ctx.source_inputs.pop(message.from_user.id, None)
     u = message.from_user
     if command.args and command.args.startswith("sub_"):
         from creator.handlers.subscription import screen
@@ -81,6 +83,7 @@ async def start(message: Message, command: CommandObject, state: FSMContext, ctx
 async def cancel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(cb.from_user.id, None)
+    ctx.source_inputs.pop(cb.from_user.id, None)
     await cb.message.edit_text("❌ Отменено.")
     await cb.answer()
 
@@ -89,4 +92,5 @@ async def cancel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
 async def cancel_cmd(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(message.from_user.id, None)
+    ctx.source_inputs.pop(message.from_user.id, None)
     await message.answer("❌ Отменено.", reply_markup=main_kb())
