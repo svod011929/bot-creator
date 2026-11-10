@@ -16,7 +16,7 @@ from creator.keyboards import BTN_CREATE, btn, cancel_kb, ikb
 from creator.money import rub
 from creator.services import Ctx
 from creator.states import CreateBot
-from creator.template_selection import CONDITIONS_UNAVAILABLE, comparison_text, detail_text
+from creator.template_selection import CONDITIONS_UNAVAILABLE, comparison_text, detail_kb, detail_text
 
 router = Router(name="create")
 
@@ -103,7 +103,7 @@ async def template_selected(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> N
     except RENDER_ERRORS:
         await cb.answer(CONDITIONS_UNAVAILABLE, show_alert=True)
         return
-    if not await _edit_screen(cb, text, ikb([btn("⬅️ Назад", "create")])):
+    if not await _edit_screen(cb, text, detail_kb(key)):
         return
     if not await _selection_unchanged(cb, state, snapshot):
         return

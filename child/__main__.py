@@ -1,4 +1,5 @@
 """Запуск дочернего бота: python -m child --dir data/bots/<id> [--check]."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,6 +15,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramServerError, Telegr
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from child.core import ChildApp, GateMiddleware, build_admin_router, build_core_router
+from child.engagement import ObservationScope
 from child.withdrawals import build_history_router
 
 EXIT_BAD_TOKEN = 3
@@ -22,6 +24,8 @@ EXIT_BAD_TOKEN = 3
 def build_dispatcher(app: ChildApp) -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     gate = GateMiddleware(app)
+    dp.message.outer_middleware(ObservationScope())
+    dp.callback_query.outer_middleware(ObservationScope())
     dp.message.outer_middleware(gate)
     dp.callback_query.outer_middleware(gate)
     dp.include_router(build_core_router(app))

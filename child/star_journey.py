@@ -11,6 +11,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from child.db import ChildDB
+from child.engagement import observe
 from child.star_catalog import BADGES, CATEGORIES, CONSTELLATIONS, MISSIONS, SYMBOLS, starter_cards
 
 TZ = ZoneInfo("Europe/Moscow")
@@ -211,6 +212,11 @@ class StarJourney:
         )
 
     def _record(self, uid, metric, at):
+        observe(
+            self.db,
+            uid,
+            {"visits": "checkin", "cards": "card_complete", "memory": "memory_complete", "builds": "constellation"}[metric],
+        )
         for scope in ("story", "day", "week", "month"):
             self.db.exec(
                 "INSERT INTO star_metrics(user_id,period,metric,value) VALUES(?,?,?,1) "
@@ -336,6 +342,7 @@ class StarJourney:
                 self.now(),
             )
             result = self._public_card(c)
+            observe(self.db, uid, "card_open")
             result["answer"] = dict(self.db.one("SELECT * FROM star_answers WHERE user_id=? AND card_id=?", uid, cid))
             return result
 

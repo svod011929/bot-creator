@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from creator.bot_stats import read, render
+from creator.engagement import request as activity_request
 from creator.keyboards import btn, ikb
 from creator.services import Ctx
 
@@ -47,7 +48,8 @@ async def open_stats(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         return
     text = render(bot_id, latest["username"], data)
     try:
-        await cb.message.edit_text(text, reply_markup=ikb([btn("🔄 Обновить", f"bst:{bot_id}")],
+        await cb.message.edit_text(text, reply_markup=ikb([btn("📈 Активность и возвращения", activity_request(bot_id))],
+                                                          [btn("🔄 Обновить", f"bst:{bot_id}")],
                                                           [btn("⬅️ К боту", f"b:{bot_id}:open")]))
     except TelegramBadRequest as exc:
         if "message is not modified" not in exc.message.lower():
