@@ -3,6 +3,14 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 4 Star journey
+
+Star bot now has daily routes, 24 starter knowledge cards, memory exercises, check-in streaks, nine missions,
+four collectible constellations and spark rankings. Owners can draft, edit, schedule and publish their own cards.
+Game sparks use an independent ledger and do not change the existing wallet or withdrawal rules.
+See `STAGE4_CHANGES.md` and `docs/STAR_JOURNEY.md`. This package is stacked on deployed `472cc14` and keeps the
+Stage 1 post-review fixes (draft rollback and child environment whitelist).
+
 ## Stage 3 referral club
 
 The referral template now includes owner-managed campaigns, persistent draft editing, onboarding, campaign quizzes,
