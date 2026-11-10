@@ -3,6 +3,14 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 2 clicker adventure
+
+The clicker now includes four timed expeditions, eleven missions, three skill branches, a collection,
+achievements and XP rankings. Adventure XP is separate from the existing bot wallet. See `STAGE2_CHANGES.md`
+and `docs/CLICKER_ADVENTURE.md` for schema, compatibility, player flow and owner settings.
+This package is stacked on the deployed Stage 1 release and keeps the post-review fixes
+(draft rollback and child environment whitelist).
+
 ## Stage 1 reliability package
 
 This tree includes local fixes over snapshot `9d485a7`; see `STAGE1_CHANGES.md` for scope, additive schema changes,
