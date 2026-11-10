@@ -78,7 +78,8 @@ async def show(cb_or_msg, text: str, kb) -> None:
 async def show_card(target, ctx: Ctx, bot_id: int) -> None:
     b = ctx.db.bot(bot_id)
     if b:
-        await show(target, card_text(ctx, b), bot_card_kb(b, b["sale_price"] is not None, ctx.extra_earn))
+        has_wh = bool(getattr(ctx, "unsub", None) and (ctx.db.tgrass(bot_id) or ctx.db.pf(bot_id)))
+        await show(target, card_text(ctx, b), bot_card_kb(b, b["sale_price"] is not None, ctx.extra_earn, webhooks=has_wh))
 
 
 @router.message(F.text == BTN_MY)
@@ -115,6 +116,11 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         return
     day = ctx.price("HOSTING_DAY_PRICE")
     await state.clear()
+
+    if action == "wh":
+        from creator.handlers.webhooks import show_owner
+        await show_owner(cb, ctx, b)
+        return
 
     if action == "start":
         if day and b["hosting_balance"] < day:
