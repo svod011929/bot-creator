@@ -15,7 +15,7 @@ from child.subscription import INVITE_URL, PUBLIC_URL, parse_channel
 from creator.keyboards import btn, ikb, url_btn
 from creator.services import Ctx
 
-APPEARANCE = frozenset({"welcome", "currency", "about", "adventure_title", "adventure_intro"})
+APPEARANCE = frozenset({"welcome", "currency", "about", "adventure_title", "adventure_intro", "club_title", "club_intro"})
 CHANNEL_KEYS = frozenset({"required_channel", "channel_url"})
 MAX_JSON = 256 * 1024
 TOKEN_LIKE = re.compile(r"\b[0-9]{5,15}:[A-Za-z0-9_-]{20,}")

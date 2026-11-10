@@ -49,6 +49,7 @@ class ChildApp:
         self.info: templates.TemplateInfo = self.template.INFO
         self.db = ChildDB(self.dir / "bot.db")
         self.game = self.template.create_game(self.db) if hasattr(self.template, "create_game") else None
+        self.club = self.template.create_club(self) if hasattr(self.template, "create_club") else None
         self.username: str = self.cfg.get("username") or ""
         self._settings: dict[str, Any] = {}
         self._mtime: float = -1
@@ -243,6 +244,8 @@ def build_core_router(app: ChildApp) -> Router:
         if ref_id and reward > 0:
             await safe_send(message.bot, ref_id,
                             f"🎉 По вашей ссылке пришёл новый пользователь! +{fmt(reward)} {app.currency}")
+        if hasattr(app.template, "on_access_confirmed"):
+            app.template.on_access_confirmed(app, uid)
         text = html.escape(str(app.s.get("welcome", "Добро пожаловать!"))) + app.footer()
         await message.answer(text, reply_markup=app.menu(uid))
 
@@ -258,10 +261,15 @@ def build_core_router(app: ChildApp) -> Router:
     async def start(message: Message, command: CommandObject, state: FSMContext) -> None:
         await state.clear()
         u = message.from_user
-        ref = None
-        if command.args and command.args.startswith("r") and command.args[1:].isdigit():
-            ref = int(command.args[1:])
-        app.db.upsert_user(u.id, u.username, u.full_name, ref)
+        if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, u.id)
+        if hasattr(app.template, "start_user"):
+            app.template.start_user(app, u, command.args or "", private=message.chat.type == "private")
+        else:
+            ref = None
+            if command.args and command.args.startswith("r") and command.args[1:].isdigit():
+                ref = int(command.args[1:])
+            app.db.upsert_user(u.id, u.username, u.full_name, ref)
         tg_kb = await app.tgrass_gate(u)
         if tg_kb is not None:
             await message.answer(TG_TEXT, reply_markup=tg_kb)
@@ -305,11 +313,15 @@ def build_core_router(app: ChildApp) -> Router:
 
     @r.message(F.text == BTN_PROFILE)
     async def profile(message: Message) -> None:
+        if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, message.from_user.id)
         await send_profile(message, app, message.from_user.id)
 
     # ---------- вывод ----------
     @r.message(F.text == BTN_WITHDRAW)
     async def withdraw(message: Message, state: FSMContext) -> None:
+        if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, message.from_user.id)
         u = app.db.user(message.from_user.id)
         if not u:
             return
@@ -327,6 +339,8 @@ def build_core_router(app: ChildApp) -> Router:
     @r.message(Command("cancel"))
     async def cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
+        if message.chat.type == "private" and hasattr(app.template, "cancel_form"):
+            app.template.cancel_form(app, message.from_user.id)
         await message.answer("Отменено.", reply_markup=app.menu(message.from_user.id))
 
     @r.message(Withdraw.amount, ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
@@ -419,6 +433,8 @@ def build_admin_router(app: ChildApp) -> Router:
     @r.message(F.text == BTN_ADMIN)
     async def admin(message: Message, state: FSMContext) -> None:
         await state.clear()
+        if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, message.from_user.id)
         await message.answer("⚙️ <b>Панель владельца</b>", reply_markup=admin_kb(app))
 
     @r.callback_query(F.data == "adm:stats")
