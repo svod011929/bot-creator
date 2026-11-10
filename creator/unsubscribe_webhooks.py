@@ -340,24 +340,26 @@ class UnsubscribeService:
                 (uid,)).fetchall()
         return [r for r in rows if links_match(r[link_col], incoming)]
 
+    def _latest_relay_op(self, matches: list):
+        """Most recent completion: created_at, then highest op id as a deterministic tie-break."""
+        return max(matches, key=lambda r: (int(r["created_at"] or 0), int(r["id"])))
+
     async def apply_hub(self, provider: str, payload: dict) -> ApplyResult:
-        """Apply a hub-URL event only when it maps to exactly one relay-mode credit.
+        """Apply a hub-URL event to the latest matching relay-mode credit, if any.
 
         Several relay children can credit the same user for the same offer (shared hub key,
-        TGrass events have no child bot_id). That case is left unpenalized on purpose.
+        TGrass events have no child bot_id). Only the most recent completion is penalized;
+        older matches are left untouched. Repeated events stay on that same op (idempotent).
         """
         if provider not in PROVIDERS:
             return ApplyResult(False, "no_op", provider=provider)
         matches = self._relay_matches(provider, payload)
-        if len(matches) != 1:
-            if len(matches) > 1:
-                log.warning("unsubscribe hub event skipped: %s relay ops provider=%s",
-                            len(matches), provider)
-            return ApplyResult(False, "ambiguous" if len(matches) > 1 else "no_op",
-                               provider=provider)
+        if not matches:
+            return ApplyResult(False, "no_op", provider=provider)
+        chosen = self._latest_relay_op(matches)
         body = dict(payload)
         body.pop("bot_id", None)  # hub payload bot_id is the creator, not the child
-        return await self.apply(provider, int(matches[0]["bot_id"]), body)
+        return await self.apply(provider, int(chosen["bot_id"]), body)
 
     def _pending_url_notices(self, bot_id: int, providers: tuple[str, ...]) -> list[tuple[str, str]]:
         b = self.ctx.db.bot(bot_id)

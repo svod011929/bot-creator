@@ -236,7 +236,7 @@ async def test_hub_unique_relay_op_uses_approved_penalty_rules(svc, db):
 
 
 @pytest.mark.asyncio
-async def test_hub_ignores_factory_ops_and_skips_ambiguous_relay(svc, db):
+async def test_hub_ignores_factory_ops_and_penalizes_latest_relay(svc, db):
     factory = add_bot(db, username="factorybot")
     relay_a = add_bot(db, token="2:AA", username="relaya")
     relay_b = add_bot(db, owner=OWNER2, token="3:AA", username="relayb")
@@ -244,9 +244,9 @@ async def test_hub_ignores_factory_ops_and_skips_ambiguous_relay(svc, db):
     seed_network(db, factory, "tgrass", mode="factory")
     seed_network(db, relay_a, "tgrass", mode="relay")
     seed_network(db, relay_b, "tgrass", mode="relay")
-    credit_tgrass(db, factory, reward=70)
-    credit_tgrass(db, relay_a, reward=50)
-    credit_tgrass(db, relay_b, reward=40)  # same user + same offer_link, different child
+    assert db.tgrass_credit(factory, USER, 42, 70, ts=50, offer_link=LINK) is True
+    assert db.tgrass_credit(relay_a, USER, 42, 50, ts=100, offer_link=LINK) is True
+    assert db.tgrass_credit(relay_b, USER, 42, 40, ts=200, offer_link=LINK) is True
     seed_child(svc, factory, "tgrass")
     seed_child(svc, relay_a, "tgrass")
     seed_child(svc, relay_b, "tgrass")
@@ -255,18 +255,48 @@ async def test_hub_ignores_factory_ops_and_skips_ambiguous_relay(svc, db):
     async with TestClient(TestServer(app)) as client:
         r = await client.post(f"/webhooks/tgrass/hub/{secret}", data=json.dumps(payload()))
         assert 200 <= r.status < 300
-    # ambiguous relay match: do not invent a split, do not touch factory credit
-    assert db.user(OWNER)["balance"] == 120  # 70 factory + 50 relay_a
-    assert db.user(OWNER2)["balance"] == 40
-    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE kind='tgrass_penalty'") == 0
-    # a unique factory-only event also does not apply on the hub URL
-    credit_tgrass(db, factory, uid=USER, offer_id=99, reward=30, link=OTHER)
+        # repeat: still only the latest op, no second debit
+        r = await client.post(f"/webhooks/tgrass/hub/{secret}", data=json.dumps(payload()))
+        assert 200 <= r.status < 300
+    assert db.user(OWNER)["balance"] == 120  # 70 factory + 50 earlier relay, untouched
+    assert db.user(OWNER2)["balance"] == 0   # latest relay (40) penalized
+    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE kind='tgrass_penalty'") == 1
+    assert db.scalar("SELECT amount FROM transactions WHERE kind='tgrass_penalty'") == -40
+    assert db.one("SELECT bot_id, owner_id FROM unsubscribe_penalties")["bot_id"] == relay_b
+    from child.tgrass import completion_state
+    assert completion_state(svc.ctx.sup.bot_dir(relay_b), USER, 42)["done"] is False
+    assert completion_state(svc.ctx.sup.bot_dir(relay_a), USER, 42)["done"] is True
+    assert completion_state(svc.ctx.sup.bot_dir(factory), USER, 42)["done"] is True
+    # factory-only offer is still ignored on the hub URL
+    assert db.tgrass_credit(factory, USER, 99, 30, ts=300, offer_link=OTHER) is True
     async with TestClient(TestServer(app)) as client:
         r = await client.post(f"/webhooks/tgrass/hub/{secret}",
                               data=json.dumps(payload(link=OTHER)))
         assert 200 <= r.status < 300
-    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE kind='tgrass_penalty'") == 0
+    assert db.scalar("SELECT COUNT(*) FROM transactions WHERE kind='tgrass_penalty'") == 1
     assert db.user(OWNER)["balance"] == 150
+
+
+@pytest.mark.asyncio
+async def test_hub_latest_relay_tie_breaks_by_higher_op_id(svc, db):
+    older = add_bot(db, username="relaya")
+    newer = add_bot(db, owner=OWNER2, token="2:AA", username="relayb")
+    user_row(db, OWNER2)
+    seed_network(db, older, "tgrass", mode="relay")
+    seed_network(db, newer, "tgrass", mode="relay")
+    assert db.tgrass_credit(older, USER, 42, 50, ts=100, offer_link=LINK) is True
+    assert db.tgrass_credit(newer, USER, 42, 80, ts=100, offer_link=LINK) is True
+    seed_child(svc, older, "tgrass")
+    seed_child(svc, newer, "tgrass")
+    secret = svc.ensure_secret(0, "tgrass")
+    app = svc.app()
+    async with TestClient(TestServer(app)) as client:
+        r = await client.post(f"/webhooks/tgrass/hub/{secret}", data=json.dumps(payload()))
+        assert 200 <= r.status < 300
+    assert db.user(OWNER)["balance"] == 50
+    assert db.user(OWNER2)["balance"] == 0
+    assert db.scalar("SELECT amount FROM transactions WHERE kind='tgrass_penalty'") == -80
+    assert db.one("SELECT bot_id FROM unsubscribe_penalties")["bot_id"] == newer
 
 
 @pytest.mark.asyncio
