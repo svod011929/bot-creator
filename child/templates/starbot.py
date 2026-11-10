@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import html
+import math
 import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.db import fmt
 from child.templates import Setting, TemplateInfo
+from child.withdrawals import is_owner
 
 INFO = TemplateInfo(
     key="starbot",
@@ -45,11 +47,43 @@ ADMIN_BUTTONS = [("📋 Задания", "adm:tasks")]
 
 
 class TaskAdd(StatesGroup):
-    waiting = State()
+    waiting = State()  # step 1: title (or the legacy one-line format)
+    url = State()
+    reward = State()
+    channel = State()
+    confirm = State()
 
 
 def menu_rows(app) -> list[list[str]]:
     return [[BTN_EARN, BTN_BONUS], [BTN_TASKS, BTN_TOP]]
+
+
+def check_title(text: str) -> str:
+    title = (text or "").strip()
+    if not title:
+        raise ValueError("title")
+    return title[:100]
+
+
+def check_url(text: str) -> str:
+    url = (text or "").strip()
+    if not url.startswith(("http://", "https://", "tg://")):
+        raise ValueError("url")
+    return url
+
+
+def check_reward(text: str) -> float:
+    reward = float((text or "").strip().replace(",", "."))
+    if not math.isfinite(reward) or reward <= 0:
+        raise ValueError("reward")
+    return reward
+
+
+def check_channel(text: str) -> str:
+    channel = (text or "").strip()
+    if channel and not (channel.startswith("@") or channel.lstrip("-").isdigit()):
+        raise ValueError("channel")
+    return channel
 
 
 def parse_task(text: str) -> tuple[str, str, float, str]:
@@ -57,13 +91,8 @@ def parse_task(text: str) -> tuple[str, str, float, str]:
     parts = [p.strip() for p in text.split("|")]
     if len(parts) < 3:
         raise ValueError("format")
-    title, url, reward = parts[0], parts[1], float(parts[2].replace(",", "."))
-    channel = parts[3] if len(parts) > 3 else ""
-    if not title or not url.startswith(("http://", "https://", "tg://")) or reward <= 0:
-        raise ValueError("values")
-    if channel and not (channel.startswith("@") or channel.lstrip("-").isdigit()):
-        raise ValueError("channel")
-    return title[:100], url, reward, channel
+    return (check_title(parts[0]), check_url(parts[1]), check_reward(parts[2]),
+            check_channel(parts[3] if len(parts) > 3 else ""))
 
 
 def build_router(app) -> Router:
@@ -171,25 +200,131 @@ def build_admin_router(app) -> Router:
         await cb.message.answer("📋 <b>Задания</b> (нажмите, чтобы удалить)", reply_markup=tasks_kb())
         await cb.answer()
 
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="tcancel")]])
+    menu_texts = {t for row in menu_rows(app) for t in row} | {"👤 Профиль", "💸 Вывод", "⚙️ Админка"}
+
+    def preview(data: dict) -> tuple[str, InlineKeyboardMarkup]:
+        channel = (f"автопроверка подписки на {html.escape(data['channel'])} (бот должен быть админом канала)"
+                   if data["channel"] else "без проверки подписки")
+        text = ("📋 <b>Проверьте задание</b>\n\n"
+                f"Название: {html.escape(data['title'])}\nСсылка: {html.escape(data['url'])}\n"
+                f"Награда: {fmt(data['reward'])} {html.escape(app.currency)}\nКанал: {channel}\n\n"
+                "Пока вы не нажмёте «Сохранить», ничего не записывается.")
+        return text, InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Сохранить", callback_data="tsave"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="tcancel")]])
+
+    async def to_preview(message: Message, state: FSMContext) -> None:
+        await state.set_state(TaskAdd.confirm)
+        text, kb = preview(await state.get_data())
+        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
     @r.callback_query(F.data == "tadd")
     async def add(cb: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
         await state.set_state(TaskAdd.waiting)
         await cb.message.answer(
-            "Пришлите задание в формате:\n<code>Название | ссылка | награда | @канал</code>\n"
-            "@канал — необязательно, для автопроверки подписки (бот должен быть админом канала).\n/cancel — отмена"
-        )
+            "➕ <b>Новое задание. Шаг 1/4: название</b>\nКак задание увидят пользователи, например «Подписка на канал».\n"
+            "Можно сразу одной строкой: <code>Название | ссылка | награда | @канал</code>\n/cancel — отмена",
+            reply_markup=cancel_kb)
         await cb.answer()
 
+    @r.message(StateFilter(TaskAdd.waiting, TaskAdd.url, TaskAdd.reward, TaskAdd.channel), F.text.in_(menu_texts))
+    async def menu_during_wizard(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Добавление задания отменено, ничего не сохранено.", reply_markup=app.menu(message.from_user.id))
+
     @r.message(TaskAdd.waiting, ~Command("cancel"))
-    async def add_save(message: Message, state: FSMContext) -> None:
+    async def step_title(message: Message, state: FSMContext) -> None:
+        text = message.text or ""
+        if "|" in text:
+            try:
+                title, url, reward, channel = parse_task(text)
+            except ValueError:
+                await message.answer("❌ Неверный формат. Пример: <code>Подписка на канал | https://t.me/x | 0.5 | @x</code>\n"
+                                     "Или пришлите только название — дальше спрошу по шагам.")
+                return
+            await state.update_data(title=title, url=url, reward=reward, channel=channel)
+            await to_preview(message, state)
+            return
         try:
-            title, url, reward, channel = parse_task(message.text or "")
+            title = check_title(text)
         except ValueError:
-            await message.answer("❌ Неверный формат. Пример: <code>Подписка на канал | https://t.me/x | 0.5 | @x</code>")
+            await message.answer("Шаг 1/4: пришлите название текстом.", reply_markup=cancel_kb)
+            return
+        await state.update_data(title=title)
+        await state.set_state(TaskAdd.url)
+        await message.answer("<b>Шаг 2/4: ссылка</b>\nКуда перейти пользователю, например https://t.me/channel.",
+                             reply_markup=cancel_kb)
+
+    @r.message(TaskAdd.url, ~Command("cancel"))
+    async def step_url(message: Message, state: FSMContext) -> None:
+        try:
+            url = check_url(message.text or "")
+        except ValueError:
+            await message.answer("Шаг 2/4: ссылка должна начинаться с http://, https:// или tg://", reply_markup=cancel_kb)
+            return
+        await state.update_data(url=url)
+        await state.set_state(TaskAdd.reward)
+        await message.answer(f"<b>Шаг 3/4: награда в {html.escape(app.currency)}</b>\nЧисло больше нуля, например 0.5.",
+                             reply_markup=cancel_kb)
+
+    @r.message(TaskAdd.reward, ~Command("cancel"))
+    async def step_reward(message: Message, state: FSMContext) -> None:
+        try:
+            reward = check_reward(message.text or "")
+        except ValueError:
+            await message.answer(f"Шаг 3/4: нужно число больше нуля ({html.escape(app.currency)}), например 0.5.",
+                                 reply_markup=cancel_kb)
+            return
+        await state.update_data(reward=reward)
+        await state.set_state(TaskAdd.channel)
+        await message.answer(
+            "<b>Шаг 4/4: канал для автопроверки подписки</b>\nПришлите @username или числовой ID канала "
+            "(бот должен быть админом канала) — или выполните задание без проверки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ Без проверки подписки", callback_data="tskip")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="tcancel")]]))
+
+    @r.message(TaskAdd.channel, ~Command("cancel"))
+    async def step_channel(message: Message, state: FSMContext) -> None:
+        try:
+            channel = check_channel(message.text or "")
+        except ValueError:
+            await message.answer("Шаг 4/4: канал — @username или числовой ID, либо «⏭ Без проверки подписки».")
+            return
+        await state.update_data(channel=channel)
+        await to_preview(message, state)
+
+    @r.callback_query(F.data == "tskip")
+    async def skip_channel(cb: CallbackQuery, state: FSMContext) -> None:
+        if await state.get_state() != TaskAdd.channel.state:
+            await cb.answer("Черновик устарел — начните заново.", show_alert=True)
+            return
+        await cb.answer()
+        await state.update_data(channel="")
+        await to_preview(cb.message, state)
+
+    @r.callback_query(F.data == "tcancel")
+    async def cancel_wizard(cb: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await cb.answer()
+        await cb.message.answer("Добавление задания отменено, ничего не сохранено.", reply_markup=tasks_kb())
+
+    @r.callback_query(F.data == "tsave")
+    async def save(cb: CallbackQuery, state: FSMContext) -> None:
+        data = await state.get_data()
+        if await state.get_state() != TaskAdd.confirm.state or not {"title", "url", "reward", "channel"} <= set(data):
+            await cb.answer("Черновик устарел — начните заново.", show_alert=True)
             return
         await state.clear()
-        app.db.exec("INSERT INTO tasks(title,url,channel,reward) VALUES(?,?,?,?)", title, url, channel, reward)
-        await message.answer("✅ Задание добавлено.", reply_markup=tasks_kb())
+        if not is_owner(app, cb.from_user.id):  # fresh check: ownership may have changed during the wizard
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        app.db.exec("INSERT INTO tasks(title,url,channel,reward) VALUES(?,?,?,?)",
+                    data["title"], data["url"], data["channel"], data["reward"])
+        await cb.answer("Сохранено")
+        await cb.message.answer("✅ Задание добавлено.", reply_markup=tasks_kb())
 
     @r.callback_query(F.data.startswith("tdel:"))
     async def delete(cb: CallbackQuery) -> None:
