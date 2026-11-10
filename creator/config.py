@@ -1,7 +1,9 @@
 """Загрузка конфигурации из окружения / файла .env."""
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,6 +118,27 @@ class Config:
         return self.data_dir / "bots"
 
 
+_SUPPORT_PATH = re.compile(r"(?:\+[A-Za-z0-9_-]{10,64}|[A-Za-z][A-Za-z0-9_]{3,31})")
+
+
+def support_url(raw: str) -> str:
+    """Public Telegram link (username or +invite) normalized to https://t.me/<path>; anything else -> ""."""
+    value = (raw or "").strip()
+    for prefix in ("https://t.me/", "https://telegram.me/", "t.me/"):
+        if value.startswith(prefix):
+            path = value[len(prefix):].rstrip("/")
+            return f"https://t.me/{path}" if _SUPPORT_PATH.fullmatch(path) else ""
+    return ""
+
+
+def _support_env(name: str) -> str:
+    raw = os.environ.get(name, "").strip()
+    url = support_url(raw)
+    if raw and not url:
+        logging.getLogger(__name__).warning("%s ignored: not a public t.me link", name)
+    return url
+
+
 def load_config(env_file: Path | None = None) -> Config:
     load_dotenv(env_file or PROJECT_ROOT / ".env")
     admin_ids = {
@@ -127,9 +150,9 @@ def load_config(env_file: Path | None = None) -> Config:
     return Config(
         bot_token=os.environ.get("BOT_TOKEN", "").strip(),
         admin_ids=admin_ids,
-        chat_url=os.environ.get("CHAT_URL", "").strip(),
-        channel_url=os.environ.get("CHANNEL_URL", "").strip(),
-        admin_url=os.environ.get("ADMIN_URL", "").strip(),
+        chat_url=_support_env("CHAT_URL"),
+        channel_url=_support_env("CHANNEL_URL"),
+        admin_url=_support_env("ADMIN_URL"),
         data_dir=data_dir,
         launch_date=os.environ.get("LAUNCH_DATE", "").strip(),
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip() or "INFO",
