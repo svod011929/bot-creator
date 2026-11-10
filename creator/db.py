@@ -143,6 +143,14 @@ CREATE TABLE IF NOT EXISTS webhook_secrets (
     PRIMARY KEY (bot_id, provider)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_webhook_secret ON webhook_secrets(secret);
+CREATE TABLE IF NOT EXISTS webhook_url_notices (
+    bot_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    owner_id INTEGER NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (bot_id, provider, secret)
+);
 CREATE TABLE IF NOT EXISTS unsubscribe_penalties (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
@@ -240,6 +248,11 @@ class DB:
             if "tgrass_ops" in {r[0] for r in self.conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'")} and "offer_link" not in self._columns("tgrass_ops"):
                 self.conn.execute("ALTER TABLE tgrass_ops ADD COLUMN offer_link TEXT")
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS webhook_url_notices ("
+                "bot_id INTEGER NOT NULL, provider TEXT NOT NULL, secret TEXT NOT NULL, "
+                "owner_id INTEGER NOT NULL, sent_at INTEGER NOT NULL, "
+                "PRIMARY KEY (bot_id, provider, secret))")
 
     def migrate_stars_to_rub(self) -> None:
         """Однократный перевод старой базы (суммы в Telegram Stars) в копейки по курсу 1 ⭐ = 1,5 ₽."""

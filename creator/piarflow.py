@@ -223,6 +223,7 @@ class PiarFlowService:
                 self.db.pf_set(bot_id, status="approved", mode="factory", api_key=key, pf_bot_id=pf_id,
                                error=None, decided_at=now(), decided_by=admin_id)
                 await self.ctx.apply_changes(bot_id)
+                await self._notice_webhook_urls(bot_id)
                 log.info("bot %s снова включён в PiarFlow mode=factory (админ %s)", bot_id, admin_id)
                 return
 
@@ -236,6 +237,7 @@ class PiarFlowService:
             self.db.pf_set(bot_id, status="approved", mode="relay", api_key=key, pf_bot_id=None,
                            error=None, decided_at=now(), decided_by=admin_id)
             await self.ctx.apply_changes(bot_id)
+            await self._notice_webhook_urls(bot_id)
             log.info("bot %s снова включён в PiarFlow mode=relay (админ %s)", bot_id, admin_id)
             return
 
@@ -262,8 +264,13 @@ class PiarFlowService:
             fields["error"] = "factory→relay: ошибка регистрации"
         self.db.pf_set(bot_id, **fields)
         await self.ctx.apply_changes(bot_id)
+        await self._notice_webhook_urls(bot_id)
         log.info("bot %s подключён к PiarFlow mode=%s%s (админ %s)",
                  bot_id, mode, " (fallback)" if fell_back else "", admin_id)
+
+    async def _notice_webhook_urls(self, bot_id: int) -> None:
+        from creator.unsubscribe_webhooks import hook_after_approve
+        await hook_after_approve(self.ctx, bot_id, "piarflow")
 
     async def reject(self, bot_id: int, admin_id: int) -> bool:
         t = self.db.pf(bot_id)
