@@ -12,6 +12,7 @@ FILTERS = {
     "bots": ("Боты", ("create", "hosting", "vip")),
     "ref": ("Партнёрские", ("ref",)),
     "resale": ("Перепродажа", ("resale_buy", "resale_sell")),
+    "withdraw": ("Вывод", ("withdraw", "withdraw_refund")),
     "other": ("Прочее", None),
 }
 GROUPED = tuple(k for _, kinds in FILTERS.values() if kinds for k in kinds)

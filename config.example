@@ -10,3 +10,10 @@ PIARFLOW_TOKEN=
 PIARFLOW_HUB_API_KEY=
 LAVEPAY_API_KEY=
 LAVEPAY_WEBHOOK_SECRET=
+
+# Withdrawals of earned money (manual payouts)
+# Telegram ID of the single approver; empty = the only ADMIN_IDS entry (if exactly one)
+WITHDRAW_APPROVER_ID=
+# Comma list of: card,sbp,usdt_trc20 (empty = all)
+WITHDRAW_METHODS=
+# WITHDRAW_MIN (kopecks, default 10000) and WITHDRAW_FEE_PERCENT (default 5) are also editable in admin prices
