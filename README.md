@@ -3,6 +3,15 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 3 referral club
+
+The referral template now includes owner-managed campaigns, persistent draft editing, onboarding, campaign quizzes,
+qualified invitations, goals, badges and a club ranking. Club points have their own ledger and are separate from
+the existing withdrawal balance. New users who open a campaign link (`c_TOKEN`) get the same first-touch cash
+referrer as `r<id>` links; existing `ref_reward` is credited after the same eligibility check. See
+`STAGE3_CHANGES.md` and `docs/REFERRAL_CLUB.md`. This package is stacked on deployed `542b6f8` and keeps the
+Stage 1 post-review fixes (draft rollback and child environment whitelist).
+
 ## Stage 2 clicker adventure
 
 The clicker now includes four timed expeditions, eleven missions, three skill branches, a collection,

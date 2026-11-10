@@ -77,6 +77,7 @@ class ChildDB:
             self.conn.close()
             raise
         self.lock = threading.RLock()
+        self._savepoint_counter = 0
 
     def _migrate_withdrawals(self) -> None:
         # Recheck schema after acquiring SQLite's writer lock (also protects concurrent openers).
@@ -99,13 +100,20 @@ class ChildDB:
     def tx(self) -> Iterator[sqlite3.Connection]:
         """Serialize writers across connections and roll back the whole business operation."""
         with self.lock:
-            self.conn.execute("BEGIN IMMEDIATE")
+            nested = self.conn.in_transaction
+            self._savepoint_counter += 1
+            point = f"child_operation_{self._savepoint_counter}"
+            self.conn.execute(f"SAVEPOINT {point}" if nested else "BEGIN IMMEDIATE")
             try:
                 yield self.conn
-                self.conn.execute("COMMIT")
+                self.conn.execute(f"RELEASE SAVEPOINT {point}" if nested else "COMMIT")
             except BaseException:
                 if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
+                    if nested:
+                        self.conn.execute(f"ROLLBACK TO SAVEPOINT {point}")
+                        self.conn.execute(f"RELEASE SAVEPOINT {point}")
+                    else:
+                        self.conn.execute("ROLLBACK")
                 raise
 
     def all(self, sql: str, *a: Any) -> list[sqlite3.Row]:
