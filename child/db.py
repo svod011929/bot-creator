@@ -201,6 +201,12 @@ class ChildDB:
                             f"ORDER BY created_at {direction}, id {direction} LIMIT 10 OFFSET ?", *args, page * 10)
             return rows, page, total
 
+    def paid_by_unit(self, limit: int = 10) -> list[tuple[str | None, int, float]]:
+        """Requests marked paid, grouped by the unit stored with each request (never summed across units)."""
+        rows = self.all("SELECT currency_at_request, COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
+                        "WHERE status='paid' GROUP BY currency_at_request ORDER BY COUNT(*) DESC LIMIT ?", limit)
+        return [(r[0], int(r[1]), float(r[2])) for r in rows]
+
     def stats(self) -> dict[str, Any]:
         t = time.localtime()
         today = int(time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1)))
