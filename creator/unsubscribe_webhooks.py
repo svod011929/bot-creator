@@ -6,6 +6,7 @@ Secrets stay in the private creator DB and are never written to logs or the publ
 from __future__ import annotations
 
 import hmac
+import html
 import logging
 import secrets
 import sqlite3
@@ -24,6 +25,10 @@ log = logging.getLogger("unsubscribe")
 REJECT_REASON = "автоотклонена: штраф за отписку"
 PROVIDERS = ("tgrass", "piarflow")
 PENALTY_KIND = {"tgrass": "tgrass_penalty", "piarflow": "piarflow_penalty"}
+HUB_BOT_ID = 0
+HUB_PATH = "hub"
+TG_PASTE = "TGrass — Настройки бота → Webhook → отписка:"
+PF_PASTE = "PiarFlow — кабинет @PiarFlowBot → Webhook / API:"
 OwnerNotify = Callable[[int, str], Awaitable[None]]
 ChildNotify = Callable[[int, int, str], Awaitable[None]]
 
@@ -79,10 +84,12 @@ class ApplyResult:
 
 class UnsubscribeService:
     def __init__(self, ctx: Any, notify_owner: OwnerNotify | None = None,
-                 notify_child: ChildNotify | None = None):
+                 notify_child: ChildNotify | None = None,
+                 notify_owner_strict: OwnerNotify | None = None):
         self.ctx = ctx
         self.notify_owner = notify_owner
         self.notify_child = notify_child
+        self.notify_owner_strict = notify_owner_strict or notify_owner
 
     def public_base(self) -> str:
         return (getattr(self.ctx.cfg, "webhook_public_base", "") or "https://bnbb.tech").rstrip("/")
@@ -102,7 +109,11 @@ class UnsubscribeService:
             return secret
 
     def url(self, bot_id: int, provider: str) -> str:
-        return f"{self.public_base()}/webhooks/{provider}/{int(bot_id)}/{self.ensure_secret(bot_id, provider)}"
+        token = HUB_PATH if int(bot_id) == HUB_BOT_ID else str(int(bot_id))
+        return f"{self.public_base()}/webhooks/{provider}/{token}/{self.ensure_secret(bot_id, provider)}"
+
+    def hub_url(self, provider: str) -> str:
+        return self.url(HUB_BOT_ID, provider)
 
     def _secret_ok(self, bot_id: int, provider: str, given: str) -> bool:
         row = self.ctx.db.one("SELECT secret FROM webhook_secrets WHERE bot_id=? AND provider=?",
@@ -126,13 +137,18 @@ class UnsubscribeService:
     async def handle(self, request: web.Request) -> web.Response:
         provider = str(request.match_info.get("provider") or "")
         secret = str(request.match_info.get("secret") or "")
-        try:
-            bot_id = int(request.match_info.get("bot_id") or "")
-        except (TypeError, ValueError):
-            return web.json_response({"ok": False}, status=404)
+        raw_bot = str(request.match_info.get("bot_id") or "")
+        is_hub = raw_bot == HUB_PATH
+        if is_hub:
+            bot_id = HUB_BOT_ID
+        else:
+            try:
+                bot_id = int(raw_bot)
+            except (TypeError, ValueError):
+                return web.json_response({"ok": False}, status=404)
         if provider not in PROVIDERS or not self._secret_ok(bot_id, provider, secret):
             return web.json_response({"ok": False}, status=404)
-        if self.ctx.db.bot(bot_id) is None:
+        if not is_hub and self.ctx.db.bot(bot_id) is None:
             return web.json_response({"ok": False}, status=404)
         try:
             payload = await request.json()
@@ -143,9 +159,13 @@ class UnsubscribeService:
         if payload.get("test") is True:
             return web.json_response({"ok": True})
         try:
-            await self.apply(provider, bot_id, payload)
+            if is_hub:
+                await self.apply_hub(provider, payload)
+            else:
+                await self.apply(provider, bot_id, payload)
         except Exception:  # noqa: BLE001
-            log.exception("unsubscribe apply failed provider=%s bot_id=%s", provider, bot_id)
+            log.exception("unsubscribe apply failed provider=%s bot_id=%s",
+                          provider, HUB_PATH if is_hub else bot_id)
             return web.json_response({"ok": False}, status=500)
         return web.json_response({"ok": True})
 
@@ -303,9 +323,146 @@ class UnsubscribeService:
             revert_completion(bot_dir, uid, link)
 
 
+    def _relay_matches(self, provider: str, payload: dict) -> list:
+        """Credited ops on child bots currently in relay mode, matched by user + offer link."""
+        try:
+            uid = int(payload.get("tg_user_id"))
+        except (TypeError, ValueError):
+            return []
+        incoming = str(payload.get("offer_link") or "")
+        ops_table = "tgrass_ops" if provider == "tgrass" else "pf_ops"
+        net_table = "tgrass_bots" if provider == "tgrass" else "pf_bots"
+        link_col = "offer_link" if provider == "tgrass" else "link"
+        with self.ctx.db._lock:
+            rows = self.ctx.db.conn.execute(
+                f"SELECT o.* FROM {ops_table} o JOIN {net_table} n ON n.bot_id = o.bot_id "
+                f"WHERE n.mode = 'relay' AND o.tg_user_id = ?",
+                (uid,)).fetchall()
+        return [r for r in rows if links_match(r[link_col], incoming)]
+
+    async def apply_hub(self, provider: str, payload: dict) -> ApplyResult:
+        """Apply a hub-URL event only when it maps to exactly one relay-mode credit.
+
+        Several relay children can credit the same user for the same offer (shared hub key,
+        TGrass events have no child bot_id). That case is left unpenalized on purpose.
+        """
+        if provider not in PROVIDERS:
+            return ApplyResult(False, "no_op", provider=provider)
+        matches = self._relay_matches(provider, payload)
+        if len(matches) != 1:
+            if len(matches) > 1:
+                log.warning("unsubscribe hub event skipped: %s relay ops provider=%s",
+                            len(matches), provider)
+            return ApplyResult(False, "ambiguous" if len(matches) > 1 else "no_op",
+                               provider=provider)
+        body = dict(payload)
+        body.pop("bot_id", None)  # hub payload bot_id is the creator, not the child
+        return await self.apply(provider, int(matches[0]["bot_id"]), body)
+
+    def _pending_url_notices(self, bot_id: int, providers: tuple[str, ...]) -> list[tuple[str, str]]:
+        b = self.ctx.db.bot(bot_id)
+        if not b:
+            return []
+        pending: list[tuple[str, str]] = []
+        for provider in providers:
+            if provider not in PROVIDERS:
+                continue
+            row = self.ctx.db.tgrass(bot_id) if provider == "tgrass" else self.ctx.db.pf(bot_id)
+            if not row or row["status"] != "approved":
+                continue
+            secret = self.ensure_secret(bot_id, provider)
+            already = self.ctx.db.one(
+                "SELECT 1 FROM webhook_url_notices WHERE bot_id=? AND provider=? AND secret=?",
+                bot_id, provider, secret)
+            if already:
+                continue
+            pending.append((provider, secret))
+        return pending
+
+    async def notify_owner_urls(self, bot_id: int,
+                                providers: tuple[str, ...] | None = None) -> int:
+        """Send the current owner the webhook URL(s). Mark sent only after a successful send."""
+        b = self.ctx.db.bot(bot_id)
+        if not b:
+            return 0
+        wanted = providers or PROVIDERS
+        pending = self._pending_url_notices(bot_id, wanted)
+        if not pending:
+            return 0
+        sender = self.notify_owner_strict
+        if sender is None:
+            log.info("owner url notice skipped bot_id=%s: no sender", bot_id)
+            return 0
+        urls = {provider: self.url(bot_id, provider) for provider, _secret in pending}
+        text = owner_url_notice_text(bot_id, b["username"] or "", urls)
+        try:
+            await sender(int(b["owner_id"]), text)
+        except Exception as e:  # noqa: BLE001
+            log.info("owner url notice failed bot_id=%s: %s", bot_id, e)
+            return 0
+        with self.ctx.db.tx() as c:
+            for provider, secret in pending:
+                c.execute(
+                    "INSERT OR IGNORE INTO webhook_url_notices"
+                    "(bot_id,provider,secret,owner_id,sent_at) VALUES(?,?,?,?,?)",
+                    (bot_id, provider, secret, int(b["owner_id"]), now()))
+        return len(pending)
+
+    async def backfill_owner_url_notices(self) -> dict[str, int]:
+        """One-shot: notify owners of currently approved integrations. Idempotent."""
+        db = self.ctx.db
+        bot_ids = {
+            int(r["bot_id"])
+            for table in ("tgrass_bots", "pf_bots")
+            for r in db.conn.execute(
+                f"SELECT bot_id FROM {table} WHERE status='approved'").fetchall()
+        }
+        sent = failed = 0
+        for bot_id in sorted(bot_ids):
+            pending = self._pending_url_notices(bot_id, PROVIDERS)
+            if not pending:
+                continue
+            n = await self.notify_owner_urls(bot_id)
+            if n:
+                sent += 1
+            else:
+                failed += 1
+        return {"sent": sent, "failed": failed}
+
+
+def owner_url_notice_text(bot_id: int, username: str, urls: dict[str, str]) -> str:
+    uname = html.escape(username or "—")
+    parts = [
+        f"🔗 <b>Вебхуки отписок</b> для бота ID {bot_id} @{uname}\n",
+        "Вставьте эти HTTPS-адреса в кабинеты сетей. Фабрика URL сама не ставит — "
+        "параметра вебхука в API нет.\n",
+    ]
+    if "tgrass" in urls:
+        parts.append(f"{TG_PASTE}\n<code>{html.escape(urls['tgrass'])}</code>\n")
+    if "piarflow" in urls:
+        parts.append(f"{PF_PASTE}\n<code>{html.escape(urls['piarflow'])}</code>\n")
+    parts.append("Штраф за отписку равен начисленной награде и действует после того, "
+                 "как адрес установлен.\n")
+    parts.append("Никому не пересылайте эти ссылки: кто их знает, сможет слать ложные отписки.\n")
+    parts.append("Те же адреса всегда можно открыть кнопкой «🔗 Вебхуки отписок» в карточке бота.")
+    return "\n".join(parts)
+
+
+async def hook_after_approve(ctx: Any, bot_id: int, provider: str) -> None:
+    unsub = getattr(ctx, "unsub", None)
+    if unsub is None:
+        return
+    try:
+        await unsub.notify_owner_urls(bot_id, providers=(provider,))
+    except Exception:  # noqa: BLE001
+        log.exception("owner webhook url notice failed bot_id=%s provider=%s", bot_id, provider)
+
+
 def attach(ctx: Any, notify_owner: OwnerNotify | None = None,
-           notify_child: ChildNotify | None = None) -> UnsubscribeService:
-    ctx.unsub = UnsubscribeService(ctx, notify_owner=notify_owner, notify_child=notify_child)
+           notify_child: ChildNotify | None = None,
+           notify_owner_strict: OwnerNotify | None = None) -> UnsubscribeService:
+    ctx.unsub = UnsubscribeService(ctx, notify_owner=notify_owner, notify_child=notify_child,
+                                   notify_owner_strict=notify_owner_strict)
     return ctx.unsub
 
 

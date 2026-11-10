@@ -91,7 +91,12 @@ async def run() -> None:
         if cfg.lavepay_webhook_port and cfg.lavepay_webhook_secret:
             webhook_runner = await ctx.lave.start_webhook(cfg.lavepay_webhook_host, cfg.lavepay_webhook_port)
     from creator.unsubscribe_webhooks import attach, send_as_child
-    attach(ctx, notify_owner=notify, notify_child=lambda bot_id, uid, text: send_as_child(ctx, bot_id, uid, text))
+
+    async def notify_strict(uid: int, text: str) -> None:
+        await bot.send_message(uid, text)
+
+    attach(ctx, notify_owner=notify, notify_child=lambda bot_id, uid, text: send_as_child(ctx, bot_id, uid, text),
+           notify_owner_strict=notify_strict)
     if cfg.webhook_listen_port:
         unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
     from creator.integrations import ensure_services, wait_and_sync
