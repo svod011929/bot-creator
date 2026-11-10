@@ -169,10 +169,13 @@ class ReferralClub:
         owner_id: int,
         owner_check: Callable[[int], bool] | None = None,
         clock: Callable[[], float] | None = None,
+        initialize: bool = True,
     ):
         self.db, self.owner_id = db, owner_id
         self.owner_check = owner_check or (lambda uid: uid == owner_id)
         self.clock = clock or time.time
+        if not initialize:
+            return
         with db.lock:
             if db.conn.in_transaction:
                 raise RuntimeError("Initialize club outside transactions")
@@ -544,6 +547,29 @@ class ReferralClub:
             self._event(cid, actor, "draft", 1)
             return cid
 
+    def update_draft(self, actor: int, cid: int, revision: int, values: dict) -> None:
+        with self.db.tx():
+            self._owner(actor)
+            c = self._campaign(cid)
+            if c["status"] != "draft" or c["revision"] != revision:
+                raise ClubError("Кампания уже изменилась или опубликована. Удалите устаревший мастер.")
+            data = validate_campaign(values)
+            self.db.exec(
+                "UPDATE ref_campaigns SET title=?,description=?,goal=?,reward=?,quota=?,days=?,question=?,"
+                "answers_json=?,correct=?,revision=revision+1 WHERE id=?",
+                data["title"],
+                data["description"],
+                data["goal"],
+                data["reward"],
+                data["quota"],
+                data["days"],
+                data["question"],
+                json.dumps(data["answers"], ensure_ascii=False),
+                data["correct"],
+                cid,
+            )
+            self._event(cid, actor, "edit", revision + 1)
+
     def publish(self, actor: int, cid: int, revision: int) -> None:
         with self.db.tx():
             self._owner(actor)
@@ -689,25 +715,7 @@ class ReferralClub:
                 cid = self.create_draft(actor, draft["data"])
             else:
                 cid = draft["campaign_id"]
-                c = self._campaign(cid)
-                if c["status"] != "draft" or c["revision"] != draft["campaign_revision"]:
-                    raise ClubError("Кампания уже изменилась или опубликована. Удалите устаревший мастер.")
-                data = validate_campaign(draft["data"])
-                self.db.exec(
-                    "UPDATE ref_campaigns SET title=?,description=?,goal=?,reward=?,quota=?,days=?,question=?,"
-                    "answers_json=?,correct=?,revision=revision+1 WHERE id=?",
-                    data["title"],
-                    data["description"],
-                    data["goal"],
-                    data["reward"],
-                    data["quota"],
-                    data["days"],
-                    data["question"],
-                    json.dumps(data["answers"], ensure_ascii=False),
-                    data["correct"],
-                    cid,
-                )
-                self._event(cid, actor, "edit", c["revision"] + 1)
+                self.update_draft(actor, cid, draft["campaign_revision"], draft["data"])
             self.db.exec("DELETE FROM ref_club_drafts WHERE owner_id=?", actor)
             return cid
 

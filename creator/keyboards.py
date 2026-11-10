@@ -17,7 +17,8 @@ BTN_PARTNERS = "👥 Партнёры"
 BTN_RESALE = "🛒 Перепродажа"
 BTN_INFO = "📰 Информация"
 BTN_ADMIN = "🛠 Админ-панель"  # shown only to configured admins; access is re-checked server-side
-MENU_BUTTONS = {BTN_CREATE, BTN_MY, BTN_CABINET, BTN_PARTNERS, BTN_RESALE, BTN_INFO}
+BTN_CONTENT = "📚 Контент ботов"
+MENU_BUTTONS = {BTN_CREATE, BTN_MY, BTN_CABINET, BTN_PARTNERS, BTN_RESALE, BTN_INFO, BTN_CONTENT}
 
 STATUS_ICON = {"running": "🟢", "restarting": "🟡", "error": "⚠️"}
 STATUS_TEXT = {"running": "🟢 Запущен", "restarting": "🟡 Перезапускается", "error": "⚠️ Ошибка",
@@ -25,7 +26,7 @@ STATUS_TEXT = {"running": "🟢 Запущен", "restarting": "🟡 Перез�
 
 
 def main_kb(admin: bool = False) -> ReplyKeyboardMarkup:
-    rows = [[BTN_CREATE, BTN_MY], [BTN_CABINET, BTN_PARTNERS], [BTN_RESALE, BTN_INFO]]
+    rows = [[BTN_CREATE, BTN_MY], [BTN_CABINET, BTN_PARTNERS], [BTN_RESALE, BTN_INFO], [BTN_CONTENT]]
     if admin:
         rows.append([BTN_ADMIN])
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=t) for t in r] for r in rows], resize_keyboard=True)
@@ -55,11 +56,14 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
     """Основные действия сверху; передача и удаление — отдельным блоком снизу."""
     i = b["id"]
     running = b["desired"] and b["status"] in ("running", "restarting")
+    from creator.content import callback
+
     return ikb(
         [btn("⏹ Остановить", f"b:{i}:stop") if running else btn("▶️ Запустить", f"b:{i}:start")],
         [btn("🔄 Перезапустить", f"b:{i}:restart")] if running else [],
         [btn("💳 Хостинг", f"b:{i}:host"), btn("👑 VIP", f"b:{i}:vip")],
         [btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready"), btn("📊 Статистика", f"bst:{i}")],
+        [btn("📚 Контент бота", callback(b, "home"))] if b['template'] in {"refbot", "starbot"} else [],
         [btn("⚙️ Настройки", f"b:{i}:set"),
          btn("🚫 Снять с продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
         [btn("💸 Доп заработок", f"b:{i}:tg")] if tgrass else [],
