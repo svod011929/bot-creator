@@ -117,6 +117,7 @@ async def test_starbot_bonus_tasks_admin(tmp_path, bot, session):
     await feed(cb_update(OWNER, "adm:tasks"))
     await feed(cb_update(OWNER, "tadd"))
     await feed(msg_update(OWNER, "Подписка | https://t.me/x | 2 | @x"))
+    await feed(cb_update(OWNER, "tsave"))
     assert app.db.scalar("SELECT COUNT(*) FROM tasks") == 1
     await feed(msg_update(A, "📋 Задания"))
     session.member_status = "left"
