@@ -134,6 +134,22 @@ CREATE TABLE IF NOT EXISTS pf_ops (
     UNIQUE (bot_id, tg_user_id, link)
 );
 CREATE INDEX IF NOT EXISTS ix_pf_ops_bot ON pf_ops(bot_id, created_at);
+CREATE TABLE IF NOT EXISTS withdrawal_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,                  -- requested, kopecks (debited in full)
+    fee INTEGER NOT NULL,
+    net INTEGER NOT NULL,                     -- to be paid out
+    method TEXT NOT NULL,                     -- card | sbp | usdt_trc20
+    details TEXT NOT NULL,                    -- full while pending, masked after resolution
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | paid | rejected
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    resolved_by INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_withdrawal_pending ON withdrawal_requests(user_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS ix_withdrawal_user ON withdrawal_requests(user_id, id);
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
