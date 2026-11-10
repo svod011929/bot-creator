@@ -54,6 +54,8 @@ class TemplateInfo:
     price_key: str
     description: str
     settings: list[Setting] = field(default_factory=list)
+    version: int = 1
+    capabilities: tuple[str, ...] = ()
 
     @property
     def button(self) -> str:
