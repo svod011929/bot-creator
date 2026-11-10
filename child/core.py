@@ -50,6 +50,7 @@ class ChildApp:
         self.db = ChildDB(self.dir / "bot.db")
         self.game = self.template.create_game(self.db) if hasattr(self.template, "create_game") else None
         self.club = self.template.create_club(self) if hasattr(self.template, "create_club") else None
+        self.sky = self.template.create_journey(self) if hasattr(self.template, "create_journey") else None
         self.username: str = self.cfg.get("username") or ""
         self._settings: dict[str, Any] = {}
         self._mtime: float = -1
@@ -457,11 +458,13 @@ def build_admin_router(app: ChildApp) -> Router:
 
     @r.callback_query(F.data == "adm:bc")
     async def bc_start(cb: CallbackQuery, state: FSMContext) -> None:
+        if hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, cb.from_user.id)
         await state.set_state(AdminStates.broadcast)
         await cb.message.answer("📢 Пришлите сообщение для рассылки (текст, фото, видео). /cancel — отмена")
         await cb.answer()
 
-    @r.message(AdminStates.broadcast, F.text != "/cancel")
+    @r.message(AdminStates.broadcast, F.text != "/cancel", ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
     async def bc_send(message: Message, state: FSMContext) -> None:
         await state.clear()
         ids = app.db.active_ids()
@@ -504,6 +507,8 @@ def build_admin_router(app: ChildApp) -> Router:
 
     @r.callback_query(F.data.startswith("set:"))
     async def setting_pick(cb: CallbackQuery, state: FSMContext) -> None:
+        if hasattr(app.template, "pause_forms"):
+            app.template.pause_forms(app, cb.from_user.id)
         key = cb.data.split(":", 1)[1]
         if key in {"required_channel", "channel_url"}:
             await state.clear()
@@ -520,7 +525,7 @@ def build_admin_router(app: ChildApp) -> Router:
         await cb.message.answer(f"Введите новое значение для «{st.label}»{hint}. /cancel — отмена")
         await cb.answer()
 
-    @r.message(AdminStates.setting, F.text != "/cancel")
+    @r.message(AdminStates.setting, F.text != "/cancel", ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
     async def setting_save(message: Message, state: FSMContext) -> None:
         key = (await state.get_data()).get("key")
         if key in {"required_channel", "channel_url"}:
