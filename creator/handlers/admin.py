@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import re
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
@@ -12,7 +13,8 @@ from aiogram.types import CallbackQuery, Message
 
 from child import templates
 from creator.config import MONEY_KEYS, PRICE_KEYS
-from creator.keyboards import STATUS_TEXT, btn, cancel_kb, ikb, status_icon
+from creator.handlers.access import private_admin
+from creator.keyboards import BTN_ADMIN, STATUS_TEXT, btn, cancel_kb, ikb, status_icon
 from creator.money import parse_rub, rub
 from creator.services import Ctx
 from creator.states import Admin
@@ -21,8 +23,13 @@ router = Router(name="admin")
 
 
 class IsAdmin(Filter):
+    """Re-checked on every admin message, callback and admin FSM input."""
     async def __call__(self, event, ctx: Ctx) -> bool:
-        return ctx.is_admin(event.from_user.id)
+        return private_admin(event, ctx)
+
+
+PAGE = 10
+BOT_ACTIONS = ("", "start", "stop", "del", "delask")
 
 
 router.message.filter(IsAdmin())
@@ -37,14 +44,28 @@ def panel_kb(ctx: Ctx | None = None):
         row.append(btn("🚀 PiarFlow", "a:pf"))
     return ikb([btn("📊 Статистика", "a:stats"), btn("💰 Цены", "a:prices")],
                [btn("📢 Рассылка", "a:bc"), btn("👤 Пользователи", "a:users")],
-               row, [btn("📡 Источники ОП", "src:home")])
+               row, [btn("🔎 Найти бота", "a:botfind")], [btn("📡 Источники ОП", "src:home")])
+
+
+def panel_text(ctx: Ctx) -> str:
+    """Recorded counts only (no money aggregates); recorded status is not a live Telegram check."""
+    q = ctx.db.scalar
+    users = q("SELECT COUNT(*) FROM users") or 0
+    bots = q("SELECT COUNT(*) FROM bots WHERE deleted=0") or 0
+    running = q("SELECT COUNT(*) FROM bots WHERE deleted=0 AND status='running'") or 0
+    errors = q("SELECT COUNT(*) FROM bots WHERE deleted=0 AND status='error'") or 0
+    alive = sum(1 for i in list(ctx.sup.children) if ctx.sup.is_running(i))
+    return ("🛠 <b>Админ-панель</b>\n\n"
+            f"Обзор: пользователей {users} · ботов {bots} · running {running} · error {errors} · "
+            f"процессов {alive}\n<i>Это записанный статус и процессы супервизора, не проверка ответа Telegram.</i>")
 
 
 @router.message(Command("admin"))
+@router.message(F.text == BTN_ADMIN)
 async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(message.from_user.id, None)
     await state.clear()
-    await message.answer("🛠 <b>Админ-панель</b>\n\nОтветить пользователю: <code>/reply ID текст</code>",
+    await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
                          reply_markup=panel_kb(ctx))
 
 
@@ -52,7 +73,7 @@ async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
 async def panel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(cb.from_user.id, None)
     await state.clear()
-    await cb.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=panel_kb(ctx))
+    await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx))
     await cb.answer()
 
 
@@ -180,12 +201,16 @@ def user_card(ctx: Ctx, uid: int):
     if not u:
         return None, None
     bots = ctx.db.user_bots(uid)
-    text = (f"👤 <b>{html.escape(u['full_name'] or '')}</b> {('@' + u['username']) if u['username'] else ''}\n"
+    ids = ", ".join(str(b["id"]) for b in bots[:20]) + (" …" if len(bots) > 20 else "")
+    text = (f"👤 <b>{html.escape(u['full_name'] or '')}</b> "
+            f"{('@' + html.escape(u['username'])) if u['username'] else ''}\n"
             f"ID: <code>{uid}</code>\nБаланс: {rub(u['balance'])}\nРефералов: {ctx.db.referrals_count(uid)}\n"
-            f"Ботов: {len(bots)} ({', '.join(str(b['id']) for b in bots) or '—'})\n"
+            f"Ботов: {len(bots)} ({ids or '—'})\n"
             f"Статус: {'🚫 забанен' if u['banned'] else '✅ активен'}")
+    links = [btn(f"🤖 ID {b['id']}", f"a:bot:{b['id']}") for b in bots[:PAGE]]
     kb = ikb([btn("💰 Изменить баланс", f"a:ubal:{uid}")],
              [btn("✅ Разбанить" if u["banned"] else "🚫 Забанить", f"a:uban:{uid}")],
+             *[links[i:i + 2] for i in range(0, len(links), 2)],
              [btn("⬅️ Назад", "a:main")])
     return text, kb
 
@@ -233,19 +258,90 @@ async def user_bal_set(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await message.answer(f"✅ Баланс <code>{uid}</code>: {rub(new)}")
 
 
+@router.callback_query(F.data == "a:user")
+@router.callback_query(F.data.startswith("a:user:"))
+async def user_open(cb: CallbackQuery, ctx: Ctx) -> None:
+    raw = (cb.data or "").split(":")
+    if len(raw) != 3 or not re.fullmatch(r"[0-9]{1,18}", raw[2]):
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    text, kb = user_card(ctx, int(raw[2]))
+    if not text:
+        await cb.answer("Не найден", show_alert=True)
+        return
+    await cb.message.edit_text(text, reply_markup=kb)
+    await cb.answer()
+
+
 @router.callback_query(F.data == "a:bots")
+@router.callback_query(F.data.startswith("a:bots:"))
 async def bots(cb: CallbackQuery, ctx: Ctx) -> None:
-    rows = ctx.db.all("SELECT * FROM bots WHERE deleted=0 ORDER BY id DESC LIMIT 30")
+    raw = (cb.data or "").split(":")
+    if len(raw) > 3 or (len(raw) == 3 and not re.fullmatch(r"[0-9]{1,6}", raw[2])):
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    total = ctx.db.scalar("SELECT COUNT(*) FROM bots WHERE deleted=0") or 0
+    pages = max(1, -(-total // PAGE))
+    page = min(int(raw[2]) if len(raw) == 3 else 0, pages - 1)
+    rows = ctx.db.all("SELECT * FROM bots WHERE deleted=0 ORDER BY id DESC LIMIT ? OFFSET ?", PAGE, page * PAGE)
     kb = [[btn(f"ID {b['id']} {status_icon(b['status'])} @{b['username']} | {templates.info(b['template']).title}",
                f"a:bot:{b['id']}")] for b in rows]
-    kb.append([btn("⬅️ Назад", "a:main")])
-    await cb.message.edit_text(f"🤖 <b>Боты</b> (последние {len(rows)})", reply_markup=ikb(*kb))
+    nav = ([btn("⬅️", f"a:bots:{page - 1}")] if page > 0 else []) + \
+          ([btn("➡️", f"a:bots:{page + 1}")] if page < pages - 1 else [])
+    kb += [nav, [btn("🔎 Найти бота", "a:botfind")], [btn("⬅️ Назад", "a:main")]]
+    await cb.message.edit_text(f"🤖 <b>Боты</b> — страница {page + 1}/{pages}, всего {total}", reply_markup=ikb(*kb))
     await cb.answer()
+
+
+@router.callback_query(F.data == "a:botfind")
+async def bot_find(cb: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Admin.bot_lookup)
+    await cb.message.edit_text("🔎 Пришлите ID бота или его @username:", reply_markup=cancel_kb("a:main"))
+    await cb.answer()
+
+
+@router.message(Admin.bot_lookup, F.text)
+async def bot_lookup(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    raw = message.text.strip()
+    if re.fullmatch(r"[0-9]{1,18}", raw):
+        found = ctx.db.scalar("SELECT id FROM bots WHERE id=? AND deleted=0", int(raw))
+    elif re.fullmatch(r"@?[A-Za-z0-9_]{1,64}", raw):
+        found = ctx.db.scalar("SELECT id FROM bots WHERE deleted=0 AND username=? COLLATE NOCASE "
+                              "ORDER BY id DESC LIMIT 1", raw.lstrip("@"))
+    else:
+        await message.answer("Введите числовой ID или @username бота (или /cancel).")
+        return
+    view = bot_view(ctx, found, "") if found else None
+    if not view:
+        await message.answer("Бот не найден. Пришлите другой ID или @username (или /cancel).")
+        return
+    await state.clear()
+    await message.answer(view[0], reply_markup=view[1])
+
+
+def bot_view(ctx: Ctx, bot_id: int, action: str):
+    b = ctx.db.bot(bot_id)
+    if not b:
+        return None
+    text = (f"🤖 <b>Бот ID {b['id']}</b> @{html.escape(b['username'] or '')}\nВладелец: <code>{b['owner_id']}</code>\n"
+            f"Шаблон: {templates.info(b['template']).title}\nСтатус: {STATUS_TEXT.get(b['status'], b['status'])}\n"
+            f"Хостинг: {rub(b['hosting_balance'])}\nVIP: {'да' if b['vip'] else 'нет'}\n"
+            f"Ошибка: {html.escape(b['last_error'] or '—')}")
+    kb = ikb([btn("▶️ Запустить", f"a:bot:{bot_id}:start"), btn("⏹ Остановить", f"a:bot:{bot_id}:stop")],
+             [btn("🗑 Удалить", f"a:bot:{bot_id}:delask")] if action != "delask"
+             else [btn("⚠️ Точно удалить", f"a:bot:{bot_id}:del")],
+             [btn("👤 Владелец", f"a:user:{b['owner_id']}")],
+             [btn("⬅️ Боты", "a:bots")])
+    return text, kb
 
 
 @router.callback_query(F.data.startswith("a:bot:"))
 async def bot_card(cb: CallbackQuery, ctx: Ctx) -> None:
     parts = cb.data.split(":")
+    if len(parts) not in (3, 4) or not re.fullmatch(r"[0-9]{1,18}", parts[2]) \
+            or (parts[3] if len(parts) > 3 else "") not in BOT_ACTIONS:
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
     bot_id = int(parts[2])
     action = parts[3] if len(parts) > 3 else ""
     if action == "start":
@@ -257,18 +353,9 @@ async def bot_card(cb: CallbackQuery, ctx: Ctx) -> None:
         await cb.message.edit_text(f"🗑 Бот ID {bot_id} удалён.", reply_markup=ikb([btn("⬅️ Боты", "a:bots")]))
         await cb.answer()
         return
-    b = ctx.db.bot(bot_id)
-    if not b:
+    view = bot_view(ctx, bot_id, action)
+    if not view:
         await cb.answer("Не найден", show_alert=True)
         return
-    await cb.message.edit_text(
-        f"🤖 <b>Бот ID {b['id']}</b> @{b['username']}\nВладелец: <code>{b['owner_id']}</code>\n"
-        f"Шаблон: {templates.info(b['template']).title}\nСтатус: {STATUS_TEXT.get(b['status'], b['status'])}\n"
-        f"Хостинг: {rub(b['hosting_balance'])}\nVIP: {'да' if b['vip'] else 'нет'}\n"
-        f"Ошибка: {html.escape(b['last_error'] or '—')}",
-        reply_markup=ikb([btn("▶️ Запустить", f"a:bot:{bot_id}:start"), btn("⏹ Остановить", f"a:bot:{bot_id}:stop")],
-                         [btn("🗑 Удалить", f"a:bot:{bot_id}:delask")] if action != "delask"
-                         else [btn("⚠️ Точно удалить", f"a:bot:{bot_id}:del")],
-                         [btn("⬅️ Боты", "a:bots")]),
-    )
+    await cb.message.edit_text(view[0], reply_markup=view[1])
     await cb.answer()

@@ -16,6 +16,7 @@ BTN_CABINET = "💼 Мой кабинет"
 BTN_PARTNERS = "👥 Партнёры"
 BTN_RESALE = "🛒 Перепродажа"
 BTN_INFO = "📰 Информация"
+BTN_ADMIN = "🛠 Админ-панель"  # shown only to configured admins; access is re-checked server-side
 MENU_BUTTONS = {BTN_CREATE, BTN_MY, BTN_CABINET, BTN_PARTNERS, BTN_RESALE, BTN_INFO}
 
 STATUS_ICON = {"running": "🟢", "restarting": "🟡", "error": "⚠️"}
@@ -23,8 +24,10 @@ STATUS_TEXT = {"running": "🟢 Запущен", "restarting": "🟡 Перез�
                "stopped": "🔴 Остановлен"}
 
 
-def main_kb() -> ReplyKeyboardMarkup:
+def main_kb(admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [[BTN_CREATE, BTN_MY], [BTN_CABINET, BTN_PARTNERS], [BTN_RESALE, BTN_INFO]]
+    if admin:
+        rows.append([BTN_ADMIN])
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=t) for t in r] for r in rows], resize_keyboard=True)
 
 
