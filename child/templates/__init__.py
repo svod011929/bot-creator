@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
@@ -23,8 +24,8 @@ class Setting:
             return value
         if self.kind == "float":
             value = float(raw.replace(",", "."))
-            if value < 0:
-                raise ValueError("negative")
+            if not math.isfinite(value) or value < 0:
+                raise ValueError("Invalid number")
             return value
         if self.kind == "channel":
             if raw in {"-", "0", "нет", "off"}:

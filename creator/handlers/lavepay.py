@@ -20,6 +20,7 @@ log = logging.getLogger("lavepay.ui")
 
 RUB_TOPUP_OPTIONS = (100, 250, 500, 1000, 2500)
 STATUS_TEXT = {"expired": "⌛ Счёт истёк — создайте новый.", "cancelled": "Счёт отменён.",
+               "received": "⏳ Оплата получена. Зачисление обрабатывается; повторите проверку позже.",
                "refunded": "Платёж возвращён.", "mismatch": "⚠️ Сумма оплаты не совпала, напишите администратору."}
 
 
@@ -113,6 +114,9 @@ async def lave_check(cb: CallbackQuery, ctx: Ctx) -> None:
         status, _ = await ctx.lave.check(local_id)
     except Exception as e:  # noqa: BLE001
         log.warning("check %s failed: %s", local_id, e)
+        if ctx.db.lave_get(local_id)["status"] == "received":
+            await cb.answer(STATUS_TEXT["received"], show_alert=True)
+            return
         await cb.answer("Не удалось проверить, попробуйте через минуту", show_alert=True)
         return
     if status == "paid":

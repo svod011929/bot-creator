@@ -106,6 +106,7 @@ async def run() -> None:
     dp = build_dispatcher(ctx)
     await bot.set_my_commands([BotCommand(command="start", description="Главное меню")])
     started = await sup.start_all()
+    tasks.append(asyncio.create_task(ctx.runtime_loop()))
     log.info("Конструктор @%s запущен, поднято дочерних ботов: %s", me.username, started)
     billing = asyncio.create_task(billing_loop(ctx, notify))
     try:

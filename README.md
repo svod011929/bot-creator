@@ -3,6 +3,13 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 1 reliability package
+
+This tree includes local fixes over snapshot `9d485a7`; see `STAGE1_CHANGES.md` for scope, additive schema changes,
+compatibility notes and validation. It has not been deployed. Development dependencies tested on CPython 3.12.14
+are pinned in `requirements-dev.lock.txt` (`pip install -r requirements-dev.lock.txt`). No production dependency
+upgrade or payment-policy change is implied by that lockfile.
+
 ## Local development
 Python 3.11+. Install `requirements-dev.txt`; copy `config.example` to a private `.env` and configure only when intentionally connecting services.
 Run `pytest`, `ruff check .`, `python -m compileall -q creator child`, `python -m creator --dry-run`. Tests use temporary SQLite and fake Telegram/provider sessions.

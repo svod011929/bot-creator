@@ -123,10 +123,10 @@ def build_router(app) -> Router:
             await cb.answer("Максимальный уровень", show_alert=True)
             return
         cost = upgrade_cost(app, u["level"])
-        if not app.db.try_spend(u["id"], cost):
-            await cb.answer(f"Не хватает монет: нужно {cost}", show_alert=True)
+        if not app.db.try_upgrade(u["id"], level=u["level"], cost=cost, max_level=int(app.s["max_level"])):
+            await cb.answer(f"Не хватает монет или уровень изменился: нужно {cost}. Откройте улучшения заново.",
+                            show_alert=True)
             return
-        app.db.exec("UPDATE users SET level=level+1 WHERE id=?", u["id"])
         text, kb = upgrade_view(app.db.user(u["id"]))
         try:
             await cb.message.edit_text(text, reply_markup=kb)

@@ -187,30 +187,51 @@ class LavePayService:
         return inv.get("id") == row["invoice_id"] and inv.get("order_id") == f"bc-{row['id']}" and same_amount
 
     async def apply(self, row, inv: dict) -> str | None:
-        """Применяет статус счёта из API/вебхука. Возвращает текст пользователю при оплате."""
+        """Persist the verified receipt, then atomically apply its financial effect."""
+        if not self._record(row["id"], inv):
+            return None
+        return await self._resume(row["id"], inv.get("paid_via") or "?")
+
+    def _record(self, local_id: int, inv: dict) -> bool:
+        row = self.ctx.db.lave_get(local_id)
+        if not row:
+            return False
         status = inv.get("status")
         if status != "paid":
             if status in ("expired", "cancelled", "refunded"):
                 self.ctx.db.lave_set_status(row["id"], status)
-            return None
+            return False
         if not self._matches(row, inv):
             log.error("invoice %s mismatch: amount=%s order=%s", row["invoice_id"], inv.get("amount"),
                       inv.get("order_id"))
             self.ctx.db.lave_set_status(row["id"], "mismatch")
-            return None
+            return False
+        return self.ctx.db.lave_receive(row["id"])
+
+    async def _resume(self, local_id: int, paid_via: str = "?") -> str | None:
         async with self._lock:
-            if not self.ctx.db.lave_mark_paid(row["id"]):
-                return None  # уже зачислен
-            uid, amount, payload = row["user_id"], row["amount"], row["payload"]
-            self.ctx.db.register_payment(f"lave:{row['invoice_id']}", uid, amount, payload)
-            text = await self.ctx.fulfil_payload(uid, payload, amount, via="LavePay")
+            with self.ctx.db.tx() as c:
+                job = c.execute("SELECT status FROM payment_jobs WHERE local_id=?", (local_id,)).fetchone()
+                if not job or job["status"] == "applied":
+                    return None
+                row = self.ctx.db.lave_get(local_id)
+                if not row or row["status"] != "received":
+                    raise RuntimeError("Payment state requires reconciliation")
+                uid, amount, payload = row["user_id"], row["amount"], row["payload"]
+                if not self.ctx.db.register_payment(f"lave:{row['invoice_id']}", uid, amount, payload):
+                    raise RuntimeError("Existing payment requires reconciliation")
+                text = self.ctx.fulfil_payload_data(uid, payload, amount, via="LavePay")
+                ref = self.ctx.db.credit_referrer(uid, amount, self.ctx.price("REF_PERCENT"))
+                self.ctx.db.lave_mark_paid(row["id"])
+                c.execute("UPDATE payment_jobs SET status='applied',result_text=?,applied_at=? WHERE local_id=?",
+                          (text, int(time.time()), local_id))
+        await self.ctx.run_runtime_jobs()
         log.info("LavePay invoice %s paid: uid=%s payload=%s kop=%s", row["invoice_id"], uid, payload, amount)
         await self._send(uid, text)
-        ref = self.ctx.db.credit_referrer(uid, amount, self.ctx.price("REF_PERCENT"))
         if ref:
             await self._send(ref[0], f"💰 Партнёрское начисление: +{rub(ref[1])} от оплаты вашего реферала.")
         for admin in self.ctx.cfg.admin_ids:
-            await self._send(admin, f"💳 LavePay: {rub(amount)} (${row['usd']}, {inv.get('paid_via') or '?'}) "
+            await self._send(admin, f"💳 LavePay: {rub(amount)} (${row['usd']}, {paid_via}) "
                                     f"от <code>{uid}</code>: <code>{payload}</code>")
         return text
 
@@ -226,6 +247,9 @@ class LavePayService:
         row = self.ctx.db.lave_get(local_id)
         if not row or not row["invoice_id"]:
             return "missing", None
+        if row["status"] == "received":
+            text = await self._resume(local_id)
+            return self.ctx.db.lave_get(local_id)["status"], text
         if row["status"] == "paid":
             return "paid", None
         inv = await self.client.get_invoice(row["invoice_id"])
@@ -233,6 +257,15 @@ class LavePayService:
         return (self.ctx.db.lave_get(local_id)["status"], text)
 
     async def poll_once(self) -> None:
+        # A saved receipt is sufficient to retry after a restart, even if the provider is down.
+        for job in self.ctx.db.lave_received():
+            try:
+                await self._resume(job["local_id"])
+            except Exception:  # noqa: BLE001
+                log.exception("received invoice %s still pending", job["local_id"])
+        await self.ctx.run_runtime_jobs()
+        if self.client is None:
+            return
         now = int(time.time())
         for row in self.ctx.db.lave_active():
             try:
@@ -246,7 +279,8 @@ class LavePayService:
                 log.exception("poll %s failed", row["invoice_id"])
             else:
                 # подстраховка: счёт давно истёк, а статус всё ещё active
-                if row["expires_at"] and now > row["expires_at"] + 86400:
+                current = self.ctx.db.lave_get(row["id"])
+                if current["status"] == "active" and row["expires_at"] and now > row["expires_at"] + 86400:
                     self.ctx.db.lave_set_status(row["id"], "expired")
 
     async def poll_loop(self, every: int = POLL_EVERY) -> None:
@@ -269,17 +303,20 @@ class LavePayService:
             event = json.loads(raw)
         except json.JSONDecodeError:
             return web.Response(status=400, text="bad json")
+        if not isinstance(event, dict):
+            return web.Response(status=400, text="bad event")
         etype, data = event.get("type"), event.get("data") or {}
         log.info("webhook %s %s", event.get("id"), etype)
-        if etype and etype.startswith("invoice.") and isinstance(data, dict) and data.get("id"):
+        if isinstance(etype, str) and etype.startswith("invoice.") and isinstance(data, dict) and isinstance(data.get("id"), str):
             row = self.ctx.db.lave_by_invoice(data["id"])
-            if row:
-                asyncio.get_running_loop().create_task(self._apply_safe(row, data))
+            if row and self._record(row["id"], data):
+                # Commit the receipt BEFORE returning 200. Background work is recoverable from SQLite.
+                asyncio.get_running_loop().create_task(self._resume_safe(row["id"]))
         return web.json_response({"ok": True})
 
-    async def _apply_safe(self, row, data: dict) -> None:
+    async def _resume_safe(self, local_id: int) -> None:
         try:
-            await self.apply(row, data)
+            await self._resume(local_id)
         except Exception:  # noqa: BLE001
             log.exception("webhook apply failed")
 
