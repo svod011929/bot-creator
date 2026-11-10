@@ -66,7 +66,8 @@ async def test_start_menu_and_referral(env):
     assert ctx.db.user(OWNER)["referrer_id"] == REFERRER
     start_msg = session.of(SendMessage)[0]
     kb = [b.text for row in start_msg.reply_markup.keyboard for b in row]
-    assert kb == ["🔨 Создать бота", "🤖 Мои боты", "💼 Мой кабинет", "👥 Партнёры", "🛒 Перепродажа", "📰 Информация"]
+    assert kb == ["🔨 Создать бота", "🤖 Мои боты", "💼 Мой кабинет", "👥 Партнёры", "🛒 Перепродажа", "📰 Информация",
+                  "📚 Контент ботов"]
     assert any(m.chat_id == REFERRER for m in session.of(SendMessage))
 
 
