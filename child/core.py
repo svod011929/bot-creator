@@ -332,7 +332,7 @@ def build_core_router(app: ChildApp) -> Router:
         u = app.db.user(message.from_user.id)
         min_w = float(app.s.get("min_withdraw", 0) or 0)
         if amount <= 0 or amount < min_w or amount > u["balance"]:
-            await message.answer(f"Сумма должна быть от {fmt(min_w)} до {fmt(u['balance'])}.")
+            await message.answer(f"Сумма должна быть от {fmt(min_w)} до {fmt(u['balance'])} {app.currency}.")
             return
         await state.update_data(amount=amount)
         await state.set_state(Withdraw.details)
@@ -350,7 +350,8 @@ def build_core_router(app: ChildApp) -> Router:
         if wid is None:
             await message.answer("Недостаточно средств.")
             return
-        await message.answer(f"✅ Заявка №{wid} отправлена владельцу бота.", reply_markup=app.menu(message.from_user.id))
+        await message.answer(f"✅ Заявка №{wid} отправлена владельцу бота. Выплату владелец проводит вручную; "
+                             "статус заявки — в «👤 Профиль» → «📜 Мои заявки».", reply_markup=app.menu(message.from_user.id))
         u = message.from_user
         await safe_send(
             message.bot, app.owner_id,
@@ -365,7 +366,7 @@ def build_core_router(app: ChildApp) -> Router:
 
 def wd_kb(wid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Выплачено", callback_data=f"wd:ok:{wid}"),
+        InlineKeyboardButton(text="✅ Отметить выплаченной", callback_data=f"wd:ok:{wid}"),
         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd:no:{wid}"),
     ]])
 
@@ -415,11 +416,18 @@ def build_admin_router(app: ChildApp) -> Router:
 
     @r.callback_query(F.data == "adm:stats")
     async def stats(cb: CallbackQuery) -> None:
+        from child.withdrawals import format_unit
+
         s = app.db.stats()
+        paid = app.db.paid_by_unit()
+        lines = [f"• {fmt(total)} {format_unit(unit)}" for unit, _, total in paid]
         await cb.message.answer(
-            f"📊 <b>Статистика</b>\n\n👥 Пользователей: {s['users']}\n🆕 Сегодня: {s['today']}\n"
-            f"🚫 Заблокировали бота: {s['blocked']}\n⏳ Заявок на вывод: {s['pending']}\n"
-            f"✅ Выплачено: {fmt(s['paid'])} {app.currency}"
+            f"📊 <b>Статистика</b>\n\n👥 Пользователей: {s['users']}\n"
+            f"🆕 Сегодня (с 00:00 по времени сервера): {s['today']}\n"
+            f"🚫 Недоступны для рассылки: {s['blocked']}\n⏳ Заявок на вывод: {s['pending']}\n"
+            f"✅ Отмечено выплаченными: {sum(n for _, n, _ in paid)}"
+            + ("\n" + "\n".join(lines) if lines else "")
+            + "\n\n<i>Суммы — по единице, сохранённой в каждой заявке; это ручные отметки, не подтверждение перевода.</i>"
         )
         await cb.answer()
 
