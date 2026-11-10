@@ -17,3 +17,9 @@ WITHDRAW_APPROVER_ID=
 # Comma list of: card,sbp,usdt_trc20 (empty = all)
 WITHDRAW_METHODS=
 # WITHDRAW_MIN (kopecks, default 10000) and WITHDRAW_FEE_PERCENT (default 5) are also editable in admin prices
+
+# Unsubscribe webhooks (TGrass / PiarFlow). Secrets are stored in the private DB, not here.
+# Public origin shown to owners/admins; Caddy should proxy /webhooks/* to the local listener.
+WEBHOOK_PUBLIC_BASE=https://bnbb.tech
+WEBHOOK_LISTEN_HOST=127.0.0.1
+WEBHOOK_LISTEN_PORT=8787

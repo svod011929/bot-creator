@@ -117,9 +117,16 @@ def read_child_done(bot_dir: Path, after_id: int, limit: int = 500) -> list[tupl
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
         try:
-            return [tuple(r) for r in conn.execute(
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(tgrass_done)")}
+            if "offer_link" in cols:
+                rows = conn.execute(
+                    "SELECT id, user_id, offer_id, fake, created_at, offer_link FROM tgrass_done "
+                    "WHERE id>? ORDER BY id LIMIT ?", (after_id, limit))
+                return [tuple(r) for r in rows]
+            rows = conn.execute(
                 "SELECT id, user_id, offer_id, fake, created_at FROM tgrass_done WHERE id>? ORDER BY id LIMIT ?",
-                (after_id, limit))]
+                (after_id, limit))
+            return [tuple(r) + (None,) for r in rows]
         finally:
             conn.close()
     except sqlite3.Error:  # таблицы ещё нет (бот не перезапускался с новой версией)
@@ -278,8 +285,9 @@ class TGrassService:
             return 0
         reward = self.reward()
         credited = 0
-        for _rid, uid, offer_id, fake, ts in rows:
-            if not fake and self.db.tgrass_credit(bot_id, uid, offer_id, reward, ts):
+        for _rid, uid, offer_id, fake, ts, *rest in rows:
+            link = rest[0] if rest else None
+            if not fake and self.db.tgrass_credit(bot_id, uid, offer_id, reward, ts, offer_link=link):
                 credited += 1
         self.db.tgrass_set(bot_id, cursor=rows[-1][0])
         return credited

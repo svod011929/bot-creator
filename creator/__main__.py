@@ -78,6 +78,7 @@ async def run() -> None:
     lave_client = None
     tasks: list[asyncio.Task] = []
     webhook_runner = None
+    unsub_runner = None
     if cfg.lavepay_enabled:
         lave_client = LavePayClient(cfg.lavepay_api_key, cfg.lavepay_base_url)
         ctx.lave = LavePayService(ctx, lave_client, notify=notify, webhook_secret=cfg.lavepay_webhook_secret)
@@ -89,6 +90,10 @@ async def run() -> None:
         tasks.append(asyncio.create_task(ctx.lave.poll_loop()))
         if cfg.lavepay_webhook_port and cfg.lavepay_webhook_secret:
             webhook_runner = await ctx.lave.start_webhook(cfg.lavepay_webhook_host, cfg.lavepay_webhook_port)
+    from creator.unsubscribe_webhooks import attach, send_as_child
+    attach(ctx, notify_owner=notify, notify_child=lambda bot_id, uid, text: send_as_child(ctx, bot_id, uid, text))
+    if cfg.webhook_listen_port:
+        unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
     from creator.integrations import ensure_services, wait_and_sync
     ensure_services(ctx)
     for network in ("tgrass", "piarflow"):
@@ -106,6 +111,8 @@ async def run() -> None:
             t.cancel()
         if webhook_runner:
             await webhook_runner.cleanup()
+        if unsub_runner:
+            await unsub_runner.cleanup()
         if lave_client:
             await lave_client.close()
         for network in ("tgrass", "piarflow"):

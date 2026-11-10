@@ -51,7 +51,7 @@ def cancel_kb(back: str = "cancel") -> InlineKeyboardMarkup:
     return ikb([btn("❌ Отмена", back)])
 
 
-def bot_card_kb(b, for_sale: bool, tgrass: bool = False) -> InlineKeyboardMarkup:
+def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False) -> InlineKeyboardMarkup:
     """Основные действия сверху; передача и удаление — отдельным блоком снизу."""
     i = b["id"]
     running = b["desired"] and b["status"] in ("running", "restarting")
@@ -63,6 +63,7 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False) -> InlineKeyboardMarkup
         [btn("⚙️ Настройки", f"b:{i}:set"),
          btn("🚫 Снять с продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
         [btn("💸 Доп заработок", f"b:{i}:tg")] if tgrass else [],
+        [btn("🔗 Вебхуки отписок", f"b:{i}:wh")] if webhooks else [],
         [btn("🔁 Передать бота", f"b:{i}:transfer")],
         [btn("🗑 Удалить", f"b:{i}:del")],
         [btn("⬅️ Назад", "mybots")],

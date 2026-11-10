@@ -41,6 +41,7 @@ class Ctx:
     lave: Any = None  # creator.lavepay.LavePayService, если задан LAVEPAY_API_KEY
     tgrass: Any = None  # creator.tgrass.TGrassService, если задан TGRASS_FACTORY_TOKEN
     piarflow: Any = None  # creator.piarflow.PiarFlowService, если задан PIARFLOW_TOKEN
+    unsub: Any = None  # creator.unsubscribe_webhooks.UnsubscribeService
 
     source_inputs: dict = field(default_factory=dict, repr=False)  # expiring candidate secrets, never FSM/DB
     subscription_checks: dict = field(default_factory=dict)

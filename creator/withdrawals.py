@@ -1,10 +1,12 @@
 """Creator withdrawals of earned money (rules approved by the owner on 2026-11-10).
 
-available = min(balance, max(0, E - S - W)), all in kopecks, from the user's own ledger:
+available = min(balance, max(0, E - C - S - W)), all in kopecks, from the user's own ledger:
   E — earned: positive ref, resale_sell, tgrass, piarflow;
+  C — clawbacks: tgrass_penalty, piarflow_penalty (stored as negative amounts);
   S — spending, attributed to earned first: create, hosting, vip, resale_buy and negative admin;
   W — net withdrawn: withdraw debits (incl. the pending one) minus withdraw_refund.
-topup, refund and positive admin never count as earned. Payouts are manual; see PayoutProvider.
+topup, refund and positive admin never count as earned. A negative balance makes available 0.
+Payouts are manual; see PayoutProvider.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from typing import Protocol
 from creator.db import DB, InsufficientFunds, now
 
 EARNED = ("ref", "resale_sell", "tgrass", "piarflow")
+PENALTIES = ("tgrass_penalty", "piarflow_penalty")
 SPENDING = ("create", "hosting", "vip", "resale_buy")
 METHOD_TITLES = {"card": "Банковская карта", "sbp": "СБП (по номеру телефона)", "usdt_trc20": "USDT TRC-20"}
 METHOD_PROMPTS = {
@@ -40,25 +43,28 @@ class PayoutProvider(Protocol):
 @dataclass(frozen=True)
 class Available:
     earned: int
+    penalties: int
     spent: int
     withdrawn: int
     balance: int
 
     @property
     def available(self) -> int:
-        return max(0, min(self.balance, self.earned - self.spent - self.withdrawn))
+        return max(0, min(self.balance, self.earned - self.penalties - self.spent - self.withdrawn))
 
 
 def _available(c: sqlite3.Connection, uid: int) -> Available:
     e = ",".join("?" * len(EARNED))
+    p = ",".join("?" * len(PENALTIES))
     s = ",".join("?" * len(SPENDING))
     row = c.execute(
         f"SELECT COALESCE(SUM(CASE WHEN kind IN ({e}) AND amount>0 THEN amount END),0),"
+        f" COALESCE(SUM(CASE WHEN kind IN ({p}) AND amount<0 THEN -amount END),0),"
         f" COALESCE(SUM(CASE WHEN (kind IN ({s}) OR kind='admin') AND amount<0 THEN -amount END),0),"
         " COALESCE(SUM(CASE WHEN kind='withdraw' THEN -amount WHEN kind='withdraw_refund' THEN -amount END),0)"
-        " FROM transactions WHERE user_id=?", (*EARNED, *SPENDING, uid)).fetchone()
+        " FROM transactions WHERE user_id=?", (*EARNED, *PENALTIES, *SPENDING, uid)).fetchone()
     bal = c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()
-    return Available(int(row[0]), int(row[1]), int(row[2]), int(bal[0]) if bal else 0)
+    return Available(int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(bal[0]) if bal else 0)
 
 
 def available(db: DB, uid: int) -> Available:

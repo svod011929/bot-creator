@@ -329,12 +329,27 @@ def bot_view(ctx: Ctx, bot_id: int, action: str):
             f"Шаблон: {templates.info(b['template']).title}\nСтатус: {STATUS_TEXT.get(b['status'], b['status'])}\n"
             f"Хостинг: {rub(b['hosting_balance'])}\nVIP: {'да' if b['vip'] else 'нет'}\n"
             f"Ошибка: {html.escape(b['last_error'] or '—')}")
-    kb = ikb([btn("▶️ Запустить", f"a:bot:{bot_id}:start"), btn("⏹ Остановить", f"a:bot:{bot_id}:stop")],
-             [btn("🗑 Удалить", f"a:bot:{bot_id}:delask")] if action != "delask"
-             else [btn("⚠️ Точно удалить", f"a:bot:{bot_id}:del")],
-             [btn("👤 Владелец", f"a:user:{b['owner_id']}")],
-             [btn("⬅️ Боты", "a:bots")])
+    rows = [
+        [btn("▶️ Запустить", f"a:bot:{bot_id}:start"), btn("⏹ Остановить", f"a:bot:{bot_id}:stop")],
+        [btn("🗑 Удалить", f"a:bot:{bot_id}:delask")] if action != "delask"
+        else [btn("⚠️ Точно удалить", f"a:bot:{bot_id}:del")],
+        [btn("👤 Владелец", f"a:user:{b['owner_id']}")],
+    ]
+    if getattr(ctx, "unsub", None):
+        rows.append([btn("🔗 Вебхуки отписок", f"a:wh:{bot_id}")])
+    rows.append([btn("⬅️ Боты", "a:bots")])
+    kb = ikb(*rows)
     return text, kb
+
+
+@router.callback_query(F.data.startswith("a:wh:"))
+async def webhook_urls(cb: CallbackQuery, ctx: Ctx) -> None:
+    from creator.handlers.webhooks import show_admin
+    raw = cb.data.split(":")[-1]
+    if not re.fullmatch(r"[0-9]{1,18}", raw):
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    await show_admin(cb, ctx, int(raw))
 
 
 @router.callback_query(F.data.startswith("a:bot:"))
