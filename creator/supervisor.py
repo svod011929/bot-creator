@@ -27,6 +27,13 @@ EXIT_BAD_TOKEN = 3
 MAX_CRASHES = 5          # столько падений подряд…
 CRASH_WINDOW = 300       # …за столько секунд — и бот помечается как ошибка
 LOG_MAX_BYTES = 5 * 1024 * 1024
+CHILD_ENV_KEYS = frozenset({
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP", "VIRTUAL_ENV",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "PYTHONIOENCODING", "PYTHONUTF8",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+})
 
 Notifier = Callable[[int, str], Awaitable[None]]
 
@@ -49,7 +56,11 @@ class Supervisor:
         self.creator_username = creator_username
         self.children: dict[int, Child] = {}
         self.crashes: dict[int, list[float]] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
         self._stopping = False
+
+    def _bot_lock(self, bot_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(bot_id, asyncio.Lock())
 
     def bot_dir(self, bot_id: int) -> Path:
         return self.cfg.bots_dir / str(bot_id)
@@ -95,7 +106,7 @@ class Supervisor:
         logfile = d / "bot.log"
         if logfile.exists() and logfile.stat().st_size > LOG_MAX_BYTES:
             shutil.move(logfile, d / "bot.log.1")
-        env = {k: v for k, v in os.environ.items() if k not in {"BOT_TOKEN", "ADMIN_IDS"}}
+        env = {k: v for k, v in os.environ.items() if k in CHILD_ENV_KEYS}
         env["PYTHONUNBUFFERED"] = "1"
         with open(logfile, "ab") as out:
             proc = await asyncio.create_subprocess_exec(
@@ -108,7 +119,14 @@ class Supervisor:
         self.db.update_bot(bot_id, status="running", last_error=None)
         log.info("bot %s started pid=%s", bot_id, proc.pid)
 
-    async def start(self, bot_id: int) -> None:
+    async def start(self, bot_id: int, *, require_desired: bool = False) -> None:
+        async with self._bot_lock(bot_id):
+            await self._start(bot_id, require_desired=require_desired)
+
+    async def _start(self, bot_id: int, *, require_desired: bool = False) -> None:
+        b = self.db.bot(bot_id)
+        if self._stopping or not b or (require_desired and not b["desired"]):
+            return
         self.db.update_bot(bot_id, desired=1)
         if self.is_running(bot_id):
             return
@@ -129,12 +147,17 @@ class Supervisor:
             pass
 
     async def stop(self, bot_id: int, status: str = "stopped") -> None:
-        self.db.update_bot(bot_id, desired=0, status=status)
-        await self._terminate(bot_id)
+        async with self._bot_lock(bot_id):
+            self.db.update_bot(bot_id, desired=0, status=status)
+            await self._terminate(bot_id)
 
-    async def restart(self, bot_id: int) -> None:
-        await self._terminate(bot_id)
-        await self.start(bot_id)
+    async def restart(self, bot_id: int, *, require_desired: bool = False) -> None:
+        async with self._bot_lock(bot_id):
+            b = self.db.bot(bot_id)
+            if self._stopping or not b or (require_desired and not b["desired"]):
+                return
+            await self._terminate(bot_id)
+            await self._start(bot_id, require_desired=require_desired)
 
     async def start_all(self) -> int:
         n = 0
@@ -149,7 +172,10 @@ class Supervisor:
     async def shutdown(self) -> None:
         """Остановка конструктора: гасим процессы, но desired не трогаем — после рестарта поднимутся."""
         self._stopping = True
-        await asyncio.gather(*(self._terminate(i) for i in list(self.children)), return_exceptions=True)
+        async def terminate_locked(bot_id):
+            async with self._bot_lock(bot_id):
+                await self._terminate(bot_id)
+        await asyncio.gather(*(terminate_locked(i) for i in set(self.children) | set(self._locks)), return_exceptions=True)
 
     async def _watch(self, child: Child) -> None:
         code = await child.proc.wait()
@@ -178,9 +204,10 @@ class Supervisor:
         log.warning("bot %s exited with %s, restart in %ss", bot_id, code, delay)
         self.db.update_bot(bot_id, status="restarting", last_error=f"Перезапуск после падения (код {code})")
         await asyncio.sleep(delay)
-        b = self.db.bot(bot_id)
-        if b and b["desired"] and not self._stopping and not self.is_running(bot_id):
-            await self._spawn(bot_id)
+        async with self._bot_lock(bot_id):
+            b = self.db.bot(bot_id)
+            if b and b["desired"] and not self._stopping and not self.is_running(bot_id):
+                await self._spawn(bot_id)
 
     def remove_files(self, bot_id: int) -> None:
         d = self.bot_dir(bot_id)

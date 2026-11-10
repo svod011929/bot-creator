@@ -167,7 +167,7 @@ async def balance_create(cb: CallbackQuery, ctx: Ctx) -> None:
         await cb.answer("Недостаточно средств на балансе", show_alert=True)
         return
     if bot_id is None:
-        await cb.answer("Заказ устарел, создайте бота заново", show_alert=True)
+        await cb.answer("Этот заказ уже использован или устарел. Списание не выполнено. Создайте бота заново.", show_alert=True)
         return
     await cb.message.edit_text(f"✅ Бот ID {bot_id} создан и запускается! Откройте «🤖 Мои боты».")
     await cb.answer()

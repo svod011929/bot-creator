@@ -140,16 +140,12 @@ def test_competing_connections_only_one_resolution_refund(tmp_path, monkeypatch,
     wid = first.create_withdrawal(10, 3.5, 'fake', currency='⭐')
     monkeypatch.setattr(mod, 'now', lambda: 200)
     barrier = threading.Barrier(2)
-    for db in (first, second):
-        original = db.one
-        def read(sql, *args, original=original):
-            row = original(sql, *args)
-            if sql == "SELECT * FROM withdrawals WHERE id=? AND status='pending'":
-                barrier.wait(timeout=5)
-            return row
-        monkeypatch.setattr(db, 'one', read)
+    # Compete before the transaction, not inside the serialized writer section.
+    def resolve(db, approve):
+        barrier.wait(timeout=5)
+        return db.resolve_withdrawal(wid, approve)
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
-        jobs = [pool.submit(db.resolve_withdrawal, wid, approve)
+        jobs = [pool.submit(resolve, db, approve)
                 for db, approve in zip((first, second), approvals, strict=True)]
         results = [job.result(timeout=10) for job in jobs]
     assert sum(r is not None for r in results) == 1
