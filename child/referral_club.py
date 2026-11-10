@@ -9,6 +9,7 @@ import time
 from typing import Callable
 
 from child.db import ChildDB
+from child.engagement import observe
 
 INTERESTS = {"learn": "📚 Узнавать новое", "events": "🎉 События", "tasks": "🎯 Задания"}
 ONBOARD_OPTIONS = ("Гарантированный денежный доход", "Прогресс участия, отдельно от денежного баланса", "Баланс Telegram Stars")
@@ -307,6 +308,7 @@ class ReferralClub:
             self.db.exec("UPDATE ref_club_members SET onboarding_complete=1,version=version+1 WHERE user_id=?", uid)
             self._points(uid, 20, "onboarding", f"onboarding:{uid}")
             self._badge(uid, "welcome", "👋 Участник клуба")
+            observe(self.db, uid, "onboard")
             self._qualify(uid)
 
     def _qualify(self, uid: int) -> bool:
@@ -363,6 +365,7 @@ class ReferralClub:
         )
         if campaign_count >= c["goal"]:
             self._badge(invite["inviter_id"], f"goal:{c['id']}", f"🏅 Цель: {c['title']}")
+        observe(self.db, invite["inviter_id"], "qualified", active=False)
         return True
 
     def summary(self, uid: int) -> dict:
@@ -404,6 +407,7 @@ class ReferralClub:
             if not self._open(c) or c["qualified_count"] >= c["quota"]:
                 raise ClubError("Кампания сейчас не принимает новых участников.")
             old = self.db.one("SELECT token FROM ref_club_links WHERE campaign_id=? AND inviter_id=?", cid, uid)
+            observe(self.db, uid, "link")
             if old:
                 return old["token"]
             token = secrets.token_urlsafe(12)
@@ -486,6 +490,7 @@ class ReferralClub:
                 return {"correct": False, "retry_at": retry}
             self.db.exec("UPDATE ref_campaign_answers SET answered_at=? WHERE user_id=? AND campaign_id=?", self._now(), uid, cid)
             self._points(uid, 10, "quiz", f"quiz:{cid}:{uid}", cid)
+            observe(self.db, uid, "quiz")
             return {"correct": True, "qualified": self._qualify(uid)}
 
     def invites(self, uid: int, page: int = 0) -> dict:
