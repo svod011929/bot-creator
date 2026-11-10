@@ -10,6 +10,7 @@ from aiogram.filters import Filter
 from aiogram.types import CallbackQuery
 
 from creator.db import day_start
+from creator.handlers.access import private_admin
 from creator.keyboards import btn, ikb, url_btn
 from creator.money import rub
 from creator.services import Ctx
@@ -26,7 +27,7 @@ MODE = {"relay": "📡 Трансляция спонсоров креатора"
 
 class IsAdminAndEnabled(Filter):
     async def __call__(self, event, ctx: Ctx) -> bool:
-        return ctx.tgrass is not None and ctx.is_admin(event.from_user.id)
+        return ctx.tgrass is not None and private_admin(event, ctx)
 
 
 router.callback_query.filter(IsAdminAndEnabled())

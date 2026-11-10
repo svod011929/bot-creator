@@ -24,6 +24,7 @@ class Admin(StatesGroup):
     broadcast = State()
     user_lookup = State()
     user_balance = State()
+    bot_lookup = State()
 
 
 class BotList(StatesGroup):
