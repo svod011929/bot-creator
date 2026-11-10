@@ -11,7 +11,7 @@ from tests.conftest import cb_update, msg_update
 from tests.test_creator_flow import ADMIN, OWNER, env  # noqa: F401
 
 CARD = "4111 1111 1111 1111"
-TRC = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+TRC = "T" + "X" * 29 + "RTv8"  # synthetic, format-valid sample
 
 
 @pytest.fixture
