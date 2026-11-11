@@ -3,6 +3,16 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 10 launch scenario and appearance
+
+Owners can edit welcome text, game-section titles and a first-step card from a new
+constructor studio. Six presets (two per template) stay as drafts until applied; numeric
+settings, rewards, prices and withdrawals are left untouched. An optional first-step card
+is sent only in a private chat after the existing access gate, never as a broadcast.
+Preview does not message participants. See `STAGE10_CHANGES.md` and
+`docs/PRESENTATION_STUDIO.md`. Stacked on deployed `df8a695` and keeps the Stage 1
+post-review fixes.
+
 ## Stage 9 star learning tracks
 
 Starbot owners can compile published knowledge cards into themed tracks of 3–12 ordered lessons.
