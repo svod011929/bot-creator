@@ -9,6 +9,9 @@ import sqlite3
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from child.clicker_events import FIELDS as EVENT_FIELDS
+from child.clicker_events import SCHEMA as EVENT_SCHEMA
+from child.clicker_events import ClickerEvents
 from child.db import ChildDB
 from child.referral_club import SCHEMA as CLUB_SCHEMA
 from child.referral_club import WIZARD_FIELDS, ReferralClub, validate_field
@@ -16,8 +19,11 @@ from child.star_journey import EDITOR_FIELDS, StarJourney
 from child.star_journey import SCHEMA as STAR_SCHEMA
 from creator.bot_setup import MAX_JSON, TOKEN_LIKE, _read_object
 
-KINDS = {"r": "refbot", "s": "starbot"}
+KINDS = {"r": "refbot", "s": "starbot", "c": "clicker"}
 CODES = {value: key for key, value in KINDS.items()}
+SCHEMAS = {"r": CLUB_SCHEMA, "s": STAR_SCHEMA, "c": EVENT_SCHEMA}
+ENGINES = {"r": ReferralClub, "s": StarJourney, "c": ClickerEvents}
+FORM_FIELDS = {"r": WIZARD_FIELDS, "s": EDITOR_FIELDS, "c": EVENT_FIELDS}
 FORM_SCHEMA = """CREATE TABLE IF NOT EXISTS creator_content_forms (
     owner_id INTEGER PRIMARY KEY,
     bot_id INTEGER NOT NULL,
@@ -111,7 +117,7 @@ def open_content(ctx, uid, bot_id, code, *, write=False, prepare=False):
                 if not file.is_file():
                     raise ContentError(UNAVAILABLE)
                 db = ChildDB.open_existing(file, writable=write)
-                schema = CLUB_SCHEMA if code == "r" else STAR_SCHEMA
+                schema = SCHEMAS[code]
                 required = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", schema))
                 present = {r[0] for r in db.all("SELECT name FROM sqlite_master WHERE type='table'")}
                 ready = required <= present
@@ -132,7 +138,7 @@ def open_content(ctx, uid, bot_id, code, *, write=False, prepare=False):
 
             engine = None
             if ready or prepare:
-                cls = ReferralClub if code == "r" else StarJourney
+                cls = ENGINES[code]
                 engine = cls(db, owner_id=uid, owner_check=owner_check, initialize=not ready)
             yield Content(ctx, row, uid, db, engine, code)
             _guard(ctx, row, uid)
@@ -152,11 +158,11 @@ class Content:
 
     @property
     def fields(self):
-        return WIZARD_FIELDS if self.code == "r" else EDITOR_FIELDS
+        return FORM_FIELDS[self.code]
 
     @property
     def proxy(self):
-        return SimpleNamespace(club=self, sky=self)
+        return SimpleNamespace(club=self, sky=self, events=self)
 
     def clean(self, value):
         if isinstance(value, str):
@@ -170,7 +176,14 @@ class Content:
         return value
 
     def owner_data(self, cid):
-        return self.engine.owner_campaign(self.uid, cid) if self.code == "r" else self.engine.owner_card(self.uid, cid)
+        method = {"r": "owner_campaign", "s": "owner_card", "c": "owner_event"}[self.code]
+        return getattr(self.engine, method)(self.uid, cid)
+
+    def owner_event(self, actor, cid):
+        return self.clean(self.engine.owner_event(actor, cid))
+
+    def list_events(self, actor, page=0, **kwargs):
+        return self.clean(self.engine.list_events(actor, page, **kwargs))
 
     def owner_campaign(self, actor, cid):
         return self.clean(self.engine.owner_campaign(actor, cid))
@@ -233,7 +246,7 @@ class Content:
             return self.form_get()
 
     def now_value(self):
-        return self.engine._now() if self.code == "r" else self.engine.now()
+        return self.engine.now() if self.code == "s" else self.engine._now()
 
     def _form_version(self, version):
         self.engine._owner(self.uid)

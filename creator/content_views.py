@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 
+from child import clicker_events_views as events
 from child import referral_views as club
 from child import star_views as star
 from creator.bot_setup import TOKEN_LIKE
@@ -20,7 +21,7 @@ def bind(content, text, keyboard):
     text = text.replace("/cancel — удалить этот черновик мастера.", "/cancel — выйти; форма сохранится.")
     text = text.replace("/cancel — удалить незавершённую форму.", "/cancel — выйти; форма сохранится.")
     rows = []
-    prefix = "club:" if content.code == "r" else "sky:"
+    prefix = {"r": "club:", "s": "sky:", "c": "evt:"}[content.code]
     for row in keyboard.inline_keyboard:
         buttons = []
         for original in row:
@@ -60,9 +61,9 @@ def home(content):
         )
         rows.append([btn("📚 Подготовить каталог", callback(row, "prepare"))])
     else:
-        table = "ref_campaigns" if content.code == "r" else "star_cards"
+        table = {"r": "ref_campaigns", "s": "star_cards", "c": "clicker_events"}[content.code]
         counts = {r[0]: r[1] for r in content.db.all(f"SELECT status,COUNT(*) FROM {table} GROUP BY status")}
-        text += "🚀 Кампании реферального клуба" if content.code == "r" else "🌌 Карточки созвездий"
+        text += {"r": "🚀 Кампании реферального клуба", "s": "🌌 Карточки созвездий", "c": "🎉 События кликера"}[content.code]
         text += (
             f"\nЧерновиков: {counts.get('draft', 0)} · опубликовано: {counts.get('active', 0)}"
             f" · на паузе: {counts.get('paused', 0)}\n\n"
@@ -87,6 +88,8 @@ def home(content):
 def catalog(content, page):
     if content.code == "r":
         screen = club.campaign_list(content.proxy, content.uid, page, owner=True)
+    elif content.code == "c":
+        screen = events.admin_list(content.proxy, content.uid, page)
     else:
         screen = star.admin_list(content.proxy, content.uid, page)
     return bind(content, *screen)
@@ -95,6 +98,8 @@ def catalog(content, page):
 def owner_card(content, cid, *, confirm=False):
     if content.code == "r":
         screen = club.owner_card(content.proxy, content.uid, cid, confirm=confirm)
+    elif content.code == "c":
+        screen = events.owner_event_view(content.proxy, content.uid, cid, confirm=confirm)
     else:
         screen = star.owner_card_view(content.proxy, content.uid, cid, confirm=confirm)
     text, keyboard = bind(content, *screen)
@@ -103,7 +108,7 @@ def owner_card(content, cid, *, confirm=False):
 
 
 def form(content):
-    renderer = club.wizard_view if content.code == "r" else star.editor_view
+    renderer = {"r": club.wizard_view, "s": star.editor_view, "c": events.editor_view}[content.code]
     return bind(content, *renderer(content.proxy, content.uid))
 
 
@@ -115,9 +120,12 @@ def preview(content, cid):
             f"{e(c['description'], 900)}\n\nЦель: {c['goal']} подтверждений. "
             f"За подтверждённого друга: {c['reward']} клубных баллов.\nЛимит: {c['quota']} подтверждений.\n"
         )
-    else:
+    elif content.code == "s":
         text += f"{e(c['lesson'], 700)}\n\nНаграда: 15 игровых искр.\n"
-    text += f"\n<b>{e(c['question'], 180)}</b>\n" + "\n".join(f"{i + 1}. {e(a, 80)}" for i, a in enumerate(c["answers"]))
+    else:
+        text = "👁 <b>Предпросмотр для участника</b>\n\n" + events.event_text(c)
+    if content.code != "c":
+        text += f"\n<b>{e(c['question'], 180)}</b>\n" + "\n".join(f"{i + 1}. {e(a, 80)}" for i, a in enumerate(c["answers"]))
     text += "\n\n<i>Только предпросмотр: прохождение не записывается, награды не начисляются.</i>"
     return bounded(text), ikb(
         [btn("⬅️ К материалу", callback(content.row, f"manage:{encode(cid)}"))],
@@ -128,7 +136,7 @@ def preview(content, cid):
 def calendar(content, page):
     if not 0 <= page <= 1000000:
         raise ContentError("Откройте календарь заново.")
-    table = "ref_campaigns" if content.code == "r" else "star_cards"
+    table = {"r": "ref_campaigns", "s": "star_cards", "c": "clicker_events"}[content.code]
     total = content.db.scalar(f"SELECT COUNT(*) FROM {table} WHERE days>0")
     page = min(page, max(0, (total - 1) // 6))
     order = "CASE WHEN ends_at>0 THEN ends_at ELSE 9223372036854775807 END,id" if content.code == "r" else "start_day,id"
@@ -136,15 +144,19 @@ def calendar(content, page):
     lines, rows = ["📅 <b>Календарь контента · МСК</b>", f"Страница {page + 1} · материалов со сроком: {total}"], []
     if content.code == "r":
         lines.append("Кампании начинаются после публикации. Здесь показаны сроки завершения и длительность черновиков.")
-    else:
+    elif content.code == "s":
         lines.append("Карточки доступны по расписанию после публикации. Личные маршруты участников на день уже закреплены.")
+    else:
+        lines.append("Начало и конец включены в срок. После завершения есть 7 дней для получения заработанной награды.")
     for raw in records:
         c = content.clean(dict(raw))
         if content.code == "r":
             label = club.status(c, content.now_value())
             date = f"{c['days']} дн. после публикации" if c["status"] == "draft" else "До " + club.end_label(c)
         else:
-            label = star.card_status(c, star.period("day", content.now_value()))
+            label = events.phase(c, content.now_value()) if content.code == "c" else star.card_status(
+                c, star.period("day", content.now_value())
+            )
             date = f"С {star.date_label(c['start_day'])} · {c['days']} дн."
             if c["end_day"]:
                 date += " · до " + star.date_label(c["end_day"])
@@ -163,22 +175,22 @@ def calendar(content, page):
 def bot_list(ctx, uid, page=0):
     if not 0 <= page <= 1000000:
         raise ContentError("Откройте список заново.")
-    where = "owner_id=? AND deleted=0 AND template IN ('refbot','starbot')"
+    where = "owner_id=? AND deleted=0 AND template IN ('refbot','starbot','clicker')"
     total = ctx.db.scalar(f"SELECT COUNT(*) FROM bots WHERE {where}", uid)
     page = min(page, max(0, (total - 1) // 6))
     records = ctx.db.all(f"SELECT id,template,username FROM bots WHERE {where} ORDER BY id DESC LIMIT 6 OFFSET ?", uid, page * 6)
     text = (
         f"📚 <b>Контент моих ботов</b>\nСтраница {page + 1} · ботов: {total}\n\n"
-        "Выберите клуб или созвездия для работы с материалами."
+        "Выберите кликер, клуб или созвездия для работы с материалами."
     )
     rows = []
     for row in records:
         name = row["username"] or ""
         label = "@" + name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", name) else f"бот {row['id']}"
-        title = ("🚀 Клуб" if row["template"] == "refbot" else "🌌 Созвездия") + " · " + label
+        title = {"refbot": "🚀 Клуб", "starbot": "🌌 Созвездия", "clicker": "🎉 События"}[row["template"]] + " · " + label
         rows.append([btn(title, callback(row, "home"))])
     if not records:
-        text += "\n\nПока нет реферальных или звёздных ботов. Создайте бот нужного шаблона."
+        text += "\n\nПока нет ботов с контентом. Создайте бот нужного шаблона."
     nav = []
     if page:
         nav.append(btn("⬅️", f"content:all:{encode(page - 1)}"))
