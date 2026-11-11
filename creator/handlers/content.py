@@ -11,6 +11,7 @@ from child.clicker_events import EventError
 from child.referral_club import ClubError
 from child.referral_teams import TeamError
 from child.star_journey import JourneyError
+from child.star_tracks import TrackError
 from creator import content_views as views
 from creator.content import KINDS, ContentError, decode, open_content
 from creator.keyboards import BTN_CONTENT
@@ -18,8 +19,8 @@ from creator.services import Ctx
 from creator.states import ContentInput
 
 router = Router(name="creator-content")
-WRITING = {"new", "resume", "edit", "field", "correct", "input"}
-MUTATIONS = WRITING | {
+WRITING = {"new", "resume", "edit", "field", "correct", "input", "sources", "pick", "picked"}
+MUTATIONS = (WRITING - {"sources"}) | {
     "save",
     "publish",
     "pause",
@@ -31,7 +32,7 @@ MUTATIONS = WRITING | {
     "team_pause",
     "team_activate",
 }
-ERRORS = (ContentError, ClubError, JourneyError, EventError, TeamError)
+ERRORS = (ContentError, ClubError, JourneyError, EventError, TeamError, TrackError)
 
 
 def perform(c, action, args):
@@ -41,6 +42,21 @@ def perform(c, action, args):
         return views.home(c)
     if c.engine is None:
         raise ContentError("Сначала подготовьте каталог на главном экране контента.")
+    if c.code == "t":
+        if action == "preview_step" and len(args) == 2:
+            return views.track_preview(c, decode(args[0]), decode(args[1]))
+        if action == "sources" and len(args) == 2:
+            c._form_version(decode(args[1]))
+            return views.track_sources(c, decode(args[0]))
+        if action == "pick" and len(args) == 3:
+            c.track_pick(decode(args[0]), decode(args[1]))
+            return views.track_sources(c, decode(args[2]))
+        if action == "picked" and len(args) == 1:
+            form = c._form_version(decode(args[0]))
+            if form["step"] != "cards":
+                raise ContentError("Откройте шаг выбора этапов.")
+            c.form_input(form["data"].get("cards", []), form["version"])
+            return views.form(c)
     if action in {"teams", "team", "team_prepare", "team_pause", "team_activate"} and c.code == "r":
         expected = {"teams": 2, "team": 1, "team_prepare": 0, "team_pause": 2, "team_activate": 2}[action]
         if len(args) != expected:
@@ -96,6 +112,8 @@ def perform(c, action, args):
             return views.owner_card(c, cid, confirm=True)
         if action == "publish":
             c.check_text({field: c.owner_data(cid)[field] for field in c.fields})
+            if c.code == "t":
+                c.check_text(c.owner_data(cid)["stages"])
             c.engine.publish(c.uid, cid, revision)
         else:
             c.engine.set_status(c.uid, cid, "paused" if action == "pause" else "active", revision)
@@ -196,7 +214,9 @@ async def action(cb: CallbackQuery, state: FSMContext, ctx: Ctx):
                 raise ContentError("Форма изменилась. Откройте её заново.")
         if draft:
             await state.set_state(ContentInput.active)
-            await state.set_data({"bot_id": bot_id, "template": KINDS[code], "version": version})
+            await state.set_data(
+                {"bot_id": bot_id, "template": KINDS[code], "version": version, **({"content_kind": code} if code == "t" else {})}
+            )
         else:
             await state.clear()
         await cb.answer()
@@ -210,7 +230,9 @@ async def text_input(message: Message, state: FSMContext, ctx: Ctx):
         return
     try:
         data = await state.get_data()
-        code = next((key for key, value in KINDS.items() if value == data.get("template")), None)
+        code = data.get("content_kind") or next((key for key, value in KINDS.items() if value == data.get("template")), None)
+        if not isinstance(code, str) or KINDS.get(code) != data.get("template"):
+            raise ContentError("Форма устарела. Откройте каталог заново.")
         if code is None or type(data.get("bot_id")) is not int or type(data.get("version")) is not int:
             raise ContentError("Форма устарела. Откройте каталог заново.")
         with open_content(ctx, message.from_user.id, data["bot_id"], code, write=True) as content:
