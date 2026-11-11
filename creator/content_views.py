@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import html
 import re
+from types import SimpleNamespace
 
 from child import clicker_events_views as events
+from child import referral_teams_views as teams
 from child import referral_views as club
 from child import star_views as star
 from creator.bot_setup import TOKEN_LIKE
@@ -74,6 +76,8 @@ def home(content):
             [btn("📋 Каталог", callback(row, "admin:0")), btn("➕ Создать", callback(row, "new"))],
             [btn("📅 Календарь", callback(row, "calendar:0"))],
         ]
+        if content.code == "r":
+            rows.append([btn("🤝 Команды клуба", callback(row, "teams:0:0"))])
         if content.form_get():
             text += "\n\n📝 В креаторе есть незавершённая форма."
             rows.append([btn("📝 Продолжить форму", callback(row, "resume"))])
@@ -93,6 +97,40 @@ def catalog(content, page):
     else:
         screen = star.admin_list(content.proxy, content.uid, page)
     return bind(content, *screen)
+
+
+def team_screen(content, engine, *, tid=None, offset=0, page=0):
+    if engine is None:
+        return (
+            "🤝 <b>Команды клуба</b>\nКаталог команд ещё не подготовлен. Подготовка создаёт только новую схему; "
+            "игроки сами создадут команды и выберут состав.",
+            ikb(
+                [btn("🤝 Подготовить команды", callback(content.row, "team_prepare"))],
+                [btn("📚 Контент бота", callback(content.row, "home"))],
+            ),
+        )
+    proxy = SimpleNamespace(
+        teams=SimpleNamespace(
+            owner_list=lambda *a: content.clean(engine.owner_list(*a)),
+            owner_team=lambda *a: content.clean(engine.owner_team(*a)),
+            _now=engine._now,
+        )
+    )
+    text, keyboard = (
+        teams.owner_team(proxy, content.uid, tid) if tid is not None else teams.owner_list(proxy, content.uid, offset, page)
+    )
+    actions = {"admin": "teams", "manage": "team", "pause": "team_pause", "activate": "team_activate", "home": "home"}
+    rows = []
+    for row in keyboard.inline_keyboard:
+        buttons = []
+        for original in row:
+            parts = original.callback_data.split(":")
+            if parts[0] != "rt" or parts[1] not in actions:
+                raise ContentError("Откройте команды заново.")
+            action = ":".join([actions[parts[1]], *(encode(int(part)) for part in parts[2:])])
+            buttons.append(btn(original.text, callback(content.row, action)))
+        rows.append(buttons)
+    return bounded(f"📚 <b>Контент · бот {content.row['id']}</b>\n\n" + text), ikb(*rows)
 
 
 def owner_card(content, cid, *, confirm=False):
@@ -154,8 +192,10 @@ def calendar(content, page):
             label = club.status(c, content.now_value())
             date = f"{c['days']} дн. после публикации" if c["status"] == "draft" else "До " + club.end_label(c)
         else:
-            label = events.phase(c, content.now_value()) if content.code == "c" else star.card_status(
-                c, star.period("day", content.now_value())
+            label = (
+                events.phase(c, content.now_value())
+                if content.code == "c"
+                else star.card_status(c, star.period("day", content.now_value()))
             )
             date = f"С {star.date_label(c['start_day'])} · {c['days']} дн."
             if c["end_day"]:

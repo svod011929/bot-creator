@@ -115,6 +115,7 @@ def home(app, uid):
     rows += [
         [b("📣 Кампании", "club:list:0"), b("👥 Мои приглашения", "club:invites:0")],
         [b("🏆 Рейтинг клуба", "club:rank"), b("🏅 Мои достижения", "club:achievements")],
+        [b("🤝 Команды недели", "rt:list:0")],
         [b("🔄 Проверить условия доступа", "club:check")],
     ]
     if is_owner(app, uid):
@@ -242,7 +243,8 @@ def achievements(app, uid):
     names = {"onboarding": "Знакомство", "quiz": "Задание кампании", "referral": "Подтверждённый друг"}
     for row in s["history"]:
         lines.append(f"{names[row['kind']]} · +{row['amount']} клубных баллов")
-    return "\n".join(lines), kb([[b("👋 Знакомство", "club:onboard"), b("📣 Кампании", "club:list:0")], back()])
+    return "\n".join(lines), kb([[b("👋 Знакомство", "club:onboard"), b("📣 Кампании", "club:list:0")],
+                                [b("🏅 Командные значки", "rt:awards:0")], back()])
 
 
 def ranking(app):
@@ -339,8 +341,7 @@ def build_router(app):
         if message.chat.type != "private":
             await message.answer("Откройте клуб в личном чате с ботом.")
             return
-        if is_owner(app, message.from_user.id):
-            app.club.wizard_pause(message.from_user.id)
+        app.template.pause_forms(app, message.from_user.id)
         try:
             text, markup = home(app, message.from_user.id)
         except ClubError as exc:
@@ -451,6 +452,7 @@ def build_router(app):
             return
         if kind not in WRITING_ACTIONS and is_owner(app, uid):
             app.club.wizard_pause(uid)
+        app.teams.form_pause(uid)
         await state.clear()
         await cb.answer(note)
         try:
