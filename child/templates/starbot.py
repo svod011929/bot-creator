@@ -20,6 +20,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from child.db import fmt
 from child.star_journey import StarJourney
+from child.star_tracks import StarTracks
+from child.star_tracks_views import BTN_TRACKS, open_tracks
+from child.star_tracks_views import build_router as tracks_router
 from child.star_views import BTN_JOURNEY, open_journey
 from child.star_views import build_router as journey_router
 from child.templates import Setting, TemplateInfo
@@ -31,7 +34,8 @@ INFO = TemplateInfo(
     emoji="🌟",
     price_key="PRICE_STARBOT",
     description="Маршрут дня с карточками знаний, тренировкой памяти, сериями, миссиями, коллекцией созвездий "
-                "и рейтингом искр. Владелец создаёт и планирует карточки. Игровые искры отделены от прежнего баланса и выплат.",
+                "и рейтингом искр. Тематические маршруты добавляют последовательные уроки и значки. "
+                "Владелец создаёт и планирует контент. Игровые искры отделены от прежнего баланса и выплат.",
     settings=[
         Setting("welcome", "Приветствие", "🌟 Выполняй задания, приглашай друзей и получай внутренние единицы. "
                 "В «🌌 Созвездиях» тебя ждут карточки, память и игровая коллекция. "
@@ -48,8 +52,8 @@ INFO = TemplateInfo(
         Setting("required_channel", "Обязательный канал", "", "channel"),
         Setting("channel_url", "Ссылка на канал (для приватных)", "-"),
     ],
-    version=2,
-    capabilities=("daily_route", "streaks", "knowledge_cards", "memory", "constellations", "spark_ranking"),
+    version=3,
+    capabilities=("daily_route", "streaks", "knowledge_cards", "memory", "constellations", "spark_ranking", "learning_tracks"),
 )
 
 BTN_EARN = "⭐ Заработать звёзды"
@@ -60,11 +64,15 @@ BTN_TOP = "🏆 Топ"
 DAY = 86400
 
 ADMIN_BUTTONS = [("📋 Задания", "adm:tasks"), ("🌌 Карточки созвездий", "sky:admin:0")]
-STATE_ESCAPE_TEXTS = (BTN_JOURNEY,)
+STATE_ESCAPE_TEXTS = (BTN_JOURNEY, BTN_TRACKS)
 
 
 def create_journey(app):
     return StarJourney(app.db, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
+
+
+def create_tracks(app):
+    return StarTracks(app.db, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
 
 
 def pause_forms(app, uid):
@@ -102,7 +110,7 @@ class TaskAdd(StatesGroup):
 
 
 def menu_rows(app) -> list[list[str]]:
-    return [[BTN_JOURNEY], [BTN_EARN, BTN_BONUS], [BTN_TASKS, BTN_TOP]]
+    return [[BTN_JOURNEY, BTN_TRACKS], [BTN_EARN, BTN_BONUS], [BTN_TASKS, BTN_TOP]]
 
 
 def check_title(text: str) -> str:
@@ -249,6 +257,7 @@ def build_router(app) -> Router:
             lines.append(f"{i}. {html.escape(row['full_name'] or str(row['id']))} — {fmt(row['balance'])} {app.currency}")
         await message.answer("\n".join(lines))
 
+    r.include_router(tracks_router(app))
     r.include_router(journey_router(app))
     return r
 
@@ -305,6 +314,9 @@ def build_admin_router(app) -> Router:
         await state.clear()
         if message.text == BTN_JOURNEY:
             await open_journey(message, state, app)
+            return
+        if message.text == BTN_TRACKS:
+            await open_tracks(message, state, app)
             return
         await message.answer("Добавление задания отменено, ничего не сохранено.", reply_markup=app.menu(message.from_user.id))
 

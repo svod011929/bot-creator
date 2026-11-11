@@ -3,6 +3,15 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 9 star learning tracks
+
+Starbot owners can compile published knowledge cards into themed tracks of 3–12 ordered lessons.
+Players join, progress step by step, retry after a short pause, and claim a badge. Publication
+freezes a snapshot of the lessons; pausing later source cards does not change an already published
+track. Completion awards badges only and does not change cash balances, sparks, daily cards or
+withdrawals. See `STAGE9_CHANGES.md` and `docs/STAR_TRACKS.md`. Stacked on deployed `d5e1f6a`
+and keeps the Stage 1 post-review fixes.
+
 ## Stage 8 weekly referral teams
 
 Club participants can create or join a team of up to five for the current Moscow calendar week.
