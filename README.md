@@ -3,6 +3,15 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 7 clicker events
+
+Clicker bots gain scheduled challenges: new-tap, expedition and distinct-route goals, a one-time
+XP reward and a collectible badge. Players must join first; earlier clicks and already started
+expeditions do not count. Owners create, preview, publish, pause and copy events from the
+constructor. Publication reserves dates and fixes conditions. XP stays in the game ledger and
+does not change wallets, cash rewards or withdrawals. See `STAGE7_CHANGES.md` and
+`docs/CLICKER_EVENTS.md`. Stacked on deployed `09294a2` and keeps the Stage 1 post-review fixes.
+
 ## Stage 6 demos and participant analytics
 
 Template creation cards now link to the owner's demo bots. Owners can open a local activity

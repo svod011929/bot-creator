@@ -82,6 +82,7 @@ def home(app, uid: int) -> tuple[str, InlineKeyboardMarkup]:
         lines.extend(("", f"🎯 Следующая цель: {pending['title']} · {progress}/{pending['target']}"))
     rows += [[button("🎯 Миссии", "adv:missions:story"), button("🗺 Маршруты", "adv:routes")],
              [button("🌿 Навыки", "adv:skills"), button("🎒 Коллекция", "adv:collection")],
+             [button("🎉 События и значки", "evt:home:0")],
              [button("🏆 Рейтинг", "adv:rank:month"), button("🔄 Обновить", "adv:home")]]
     lines.extend(("", "<i>XP — игровой опыт для навыков и рейтинга. Он не расходует баланс бота и не выводится.</i>"))
     return "\n".join(lines), keyboard(rows)
@@ -176,6 +177,8 @@ def collection_view(app, uid: int) -> tuple[str, InlineKeyboardMarkup]:
     lines.extend(("", "📜 <b>Последние изменения опыта</b>"))
     for row in state["history"]:
         title = {"mission": "Миссия", "expedition": "Экспедиция", "skill": "Навык"}[row["kind"]]
+        if row["source_key"].startswith("event:"):
+            title = "Событие"
         lines.append(f"{title}: {row['delta']:+d} XP · {datetime.fromtimestamp(row['created_at'], GAME_TZ):%d.%m %H:%M} МСК")
     if not state["history"]:
         lines.append("Первую награду можно получить за пять кликов в стартовой миссии.")

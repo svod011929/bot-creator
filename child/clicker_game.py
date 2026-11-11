@@ -226,7 +226,7 @@ class ClickerGame:
         self._activity(uid, at)
 
     def _award(self, uid: int, xp: int, kind: str, key: str, at: int) -> None:
-        if kind == "mission":
+        if kind == "mission" and not key.startswith("event:"):
             observe(self.db, uid, "mission")
         self.db.exec("INSERT INTO clicker_xp_entries(user_id,delta,kind,source_key,created_at) VALUES(?,?,?,?,?)",
                      uid, xp, kind, key, at)
@@ -276,7 +276,7 @@ class ClickerGame:
             achievements = [dict(r) for r in self.db.all("SELECT * FROM clicker_achievements WHERE user_id=? "
                                                         "ORDER BY awarded_at,key", uid)]
             trip = self.db.one("SELECT * FROM clicker_expeditions WHERE user_id=? AND claimed_at IS NULL", uid)
-            history = [dict(r) for r in self.db.all("SELECT delta,kind,created_at FROM clicker_xp_entries "
+            history = [dict(r) for r in self.db.all("SELECT delta,kind,source_key,created_at FROM clicker_xp_entries "
                                                   "WHERE user_id=? ORDER BY id DESC LIMIT 5", uid)]
             yesterday = (datetime.fromtimestamp(at, GAME_TZ) - timedelta(days=1)).strftime("%Y%m%d")
             if p["last_active_day"] not in (period_key("day", at), yesterday):

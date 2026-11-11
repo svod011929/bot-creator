@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from child.clicker_events import EventError
 from child.referral_club import ClubError
 from child.star_journey import JourneyError
 from creator import content_views as views
@@ -18,7 +19,7 @@ from creator.states import ContentInput
 router = Router(name="creator-content")
 WRITING = {"new", "resume", "edit", "field", "correct", "input"}
 MUTATIONS = WRITING | {"save", "publish", "pause", "activate", "copy", "discard", "prepare"}
-ERRORS = (ContentError, ClubError, JourneyError)
+ERRORS = (ContentError, ClubError, JourneyError, EventError)
 
 
 def perform(c, action, args):
@@ -75,7 +76,7 @@ def perform(c, action, args):
             c.engine.set_status(c.uid, cid, "paused" if action == "pause" else "active", revision)
         return views.owner_card(c, cid)
     if action == "copy" and len(args) == 1:
-        copier = c.engine.copy_draft if c.code == "r" else c.engine.copy_card
+        copier = c.engine.copy_card if c.code == "s" else c.engine.copy_draft
         return views.owner_card(c, copier(c.uid, decode(args[0])))
     if action in {"discard", "later"} and len(args) == 1:
         version = decode(args[0])

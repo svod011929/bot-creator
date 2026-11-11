@@ -9,9 +9,13 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from child.clicker_adventure import BTN_ADVENTURE, ranking_view
 from child.clicker_adventure import build_router as adventure_router
+from child.clicker_events import ClickerEvents
+from child.clicker_events_views import BTN_EVENTS
+from child.clicker_events_views import build_router as events_router
 from child.clicker_game import ClickerGame
 from child.db import fmt
 from child.templates import Setting, TemplateInfo
+from child.withdrawals import is_owner
 
 INFO = TemplateInfo(
     key="clicker",
@@ -19,7 +23,8 @@ INFO = TemplateInfo(
     emoji="⛏",
     price_key="PRICE_CLICKER",
     description="Кликер с экспедициями, стартовыми, ежедневными и недельными миссиями, тремя ветками навыков, "
-                "коллекцией и рейтингом опыта. Баланс бота и игровой XP учитываются отдельно; выплаты — по ручным заявкам.",
+                "коллекцией, тематическими событиями со значками и рейтингом опыта. "
+                "Баланс бота и игровой XP учитываются отдельно; выплаты — по ручным заявкам.",
     settings=[
         Setting("welcome", "Приветствие", "👋 Добро пожаловать в кликер! Жми «👆 Кликать» и зарабатывай монеты. "
                 "В «🧭 Приключение» тебя ждут миссии, маршруты, навыки и коллекция находок."),
@@ -36,8 +41,8 @@ INFO = TemplateInfo(
         Setting("required_channel", "Обязательный канал", "", "channel"),
         Setting("channel_url", "Ссылка на канал (для приватных)", "-"),
     ],
-    version=2,
-    capabilities=("missions", "expeditions", "skills", "collection", "xp_ranking"),
+    version=3,
+    capabilities=("missions", "expeditions", "skills", "collection", "xp_ranking", "events"),
 )
 
 BTN_CLICK = "👆 Кликать"
@@ -46,11 +51,15 @@ BTN_TOP = "🏆 Топ"
 BTN_INVITE = "👥 Пригласить"
 
 TAP_COOLDOWN = 0.25
-STATE_ESCAPE_TEXTS = (BTN_ADVENTURE,)
+STATE_ESCAPE_TEXTS = (BTN_ADVENTURE, BTN_EVENTS)
 
 
 def create_game(db):
     return ClickerGame(db)
+
+
+def create_events(app):
+    return ClickerEvents(app.db, game=app.game, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
 
 
 def profile_extra(app, uid: int) -> str:
@@ -67,7 +76,7 @@ def admin_stats_extra(app) -> str:
 
 
 def menu_rows(app) -> list[list[str]]:
-    return [[BTN_ADVENTURE], [BTN_CLICK, BTN_UPGRADE], [BTN_TOP, BTN_INVITE]]
+    return [[BTN_ADVENTURE, BTN_EVENTS], [BTN_CLICK, BTN_UPGRADE], [BTN_TOP, BTN_INVITE]]
 
 
 def click_power(app, level: int) -> int:
@@ -177,4 +186,5 @@ def build_router(app) -> Router:
         )
 
     r.include_router(adventure_router(app))
+    r.include_router(events_router(app))
     return r
