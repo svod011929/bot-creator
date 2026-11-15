@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from child import templates
+from creator import bot_broadcast as bcb
 from creator.config import MONEY_KEYS, PRICE_KEYS
 from creator.handlers.access import private_admin
 from creator.keyboards import BTN_ADMIN, STATUS_TEXT, btn, cancel_kb, ikb, status_icon
@@ -47,7 +48,8 @@ def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
     if ctx is not None and getattr(ctx, "unsub", None):
         extra.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
     return ikb([btn("📊 Статистика", "a:stats"), btn("💰 Цены", "a:prices")],
-               [btn("📢 Рассылка", "a:bc"), btn("👤 Пользователи", "a:users")],
+               [btn("📢 Рассылка", "a:bc"), btn("📢 По ботам", "a:bcb")],
+               [btn("👤 Пользователи", "a:users")],
                row, [btn("🔎 Найти бота", "a:botfind"), btn("📜 Журнал", "a:alog:0")],
                [btn("💳 LavePay", "a:lave:0")],
                [btn("📡 Источники ОП", "src:home")],
@@ -73,6 +75,7 @@ def panel_text(ctx: Ctx) -> str:
 @router.message(F.text == BTN_ADMIN)
 async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(message.from_user.id, None)
+    bcb.clear_payload(message.from_user.id)
     await state.clear()
     await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
                          reply_markup=panel_kb(ctx, message.from_user.id))
@@ -81,6 +84,7 @@ async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
 @router.callback_query(F.data == "a:main")
 async def panel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(cb.from_user.id, None)
+    bcb.clear_payload(cb.from_user.id)
     await state.clear()
     await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx, cb.from_user.id))
     await cb.answer()
@@ -216,6 +220,89 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         await cb.bot.send_message(cb.from_user.id, f"✅ Рассылка завершена: доставлено {ok}, ошибок {fail}.")
 
     asyncio.create_task(run())
+
+
+
+@router.callback_query(F.data == "a:bcb")
+async def bcb_start(cb: CallbackQuery, state: FSMContext) -> None:
+    bcb.clear_payload(cb.from_user.id)
+    await state.set_state(Admin.broadcast_bots)
+    await cb.message.edit_text(
+        "📢 Рассылка по пользователям <b>всех дочерних ботов</b> (кроме удалённых).\n"
+        "Сообщение уйдёт от имени каждого бота его игрокам.\n"
+        "Пришлите текст или медиа. Дальше будет подсчёт получателей и подтверждение. "
+        "Автоматических рассылок нет.",
+        reply_markup=cancel_kb("a:main"),
+    )
+    await cb.answer()
+
+
+@router.message(Admin.broadcast_bots)
+async def bcb_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    if not bcb.can_relay(message):
+        await message.answer(
+            "Этот тип сообщения не поддерживается. Пришлите текст, фото, видео, документ, "
+            "анимацию, аудио или голосовое.",
+            reply_markup=cancel_kb("a:main"),
+        )
+        return
+    targets = bcb.collect_recipient_counts(ctx.db, ctx.sup.bot_dir)
+    total = sum(len(ids) for _bot, ids in targets)
+    bcb.store_payload(message.from_user.id, message)
+    await state.update_data(bcb_ready=True, bcb_total=total, bcb_bots=len(targets))
+    await message.answer(
+        f"👁 Предпросмотр рассылки по дочерним ботам.\n\n"
+        f"Ботов с получателями: {len(targets)}\n"
+        f"Всего получателей: {total}\n\n"
+        "Сообщение уйдёт от имени каждого бота. Запуск только этой кнопкой, "
+        "после перезапуска рассылка сама не продолжится.",
+        reply_markup=ikb(
+            [btn(f"✅ Отправить {total}", "a:bcbgo")],
+            [btn("❌ Отмена", "a:main")],
+        ),
+    )
+
+
+@router.callback_query(F.data == "a:bcbgo")
+async def bcb_send(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    data = await state.get_data()
+    source = bcb.pop_payload(cb.from_user.id)
+    await state.clear()
+    if not data.get("bcb_ready") or source is None:
+        await cb.answer("Сначала пришлите сообщение и подтвердите отправку", show_alert=True)
+        return
+    if bcb.is_busy():
+        await cb.answer("Уже идёт другая рассылка по ботам", show_alert=True)
+        return
+    targets = bcb.collect_recipient_counts(ctx.db, ctx.sup.bot_dir)
+    total = sum(len(ids) for _b, ids in targets)
+    await cb.message.edit_text(
+        f"🚀 Рассылка по ботам запущена: {len(targets)} ботов, {total} получателей."
+    )
+    await cb.answer()
+    ctx.db.log_admin(
+        cb.from_user.id, "broadcast_bots",
+        detail=f"bots={len(targets)} recipients={total}",
+    )
+    notify_bot = cb.bot
+    admin_id = cb.from_user.id
+    session = cb.bot.session
+
+    async def run() -> None:
+        async with bcb.lock():
+            ok, fail = await bcb.run_broadcast(
+                db=ctx.db,
+                session=session,
+                source=source,
+                targets=targets,
+                admin_id=admin_id,
+            )
+        await notify_bot.send_message(
+            admin_id,
+            f"✅ Рассылка по ботам завершена: доставлено {ok}, ошибок {fail}.",
+        )
+
+    bcb.spawn(run())
 
 
 FILTERS = ("all", "banned", "withbots", "nonzero")
