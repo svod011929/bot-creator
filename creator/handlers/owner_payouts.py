@@ -63,6 +63,15 @@ def shop_text(ctx: Ctx, b) -> tuple[str, object]:
             "Для кликера задайте, чему равна 1 единица баланса: в USDT или в рублях. "
             "Без этого LavePay не включится — чтобы монеты случайно не стали рублями."
         )
+    ready_shop = bool(shop and shop.get("status") == "active" and shop.get("payouts_enabled"))
+    ready_rate = bool(kind and rate) or (kind == "rub" and rate == "1")
+    if b["template"] == "clicker":
+        shop_state = "подключён" if ready_shop else "нет"
+        rate_state = "задан" if ready_rate else "не задан"
+        lines.append(f"Готовность кликера: магазин {shop_state}, курс {rate_state}.")
+    else:
+        shop_state = "подключён" if ready_shop else "нет"
+        lines.append(f"Готовность: магазин {shop_state}.")
     if flags.get("lavepay_payouts_enabled"):
         lines.append("Путь LavePay для этого бота включён.")
     else:

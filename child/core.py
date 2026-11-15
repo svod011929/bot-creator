@@ -502,6 +502,8 @@ def build_admin_router(app: ChildApp) -> Router:
     r = Router(name="owner-admin")
     r.message.filter(F.from_user.id == app.owner_id)
     r.callback_query.filter(F.from_user.id == app.owner_id)
+    r.message.filter(F.chat.type == "private")
+    r.callback_query.filter(F.message.chat.type == "private")
 
     @r.message(Command("admin"))
     @r.message(F.text == BTN_ADMIN)
@@ -767,6 +769,16 @@ def build_admin_router(app: ChildApp) -> Router:
             return
         await state.clear()
         app.set(st.key, value)
-        await message.answer(f"✅ «{st.label}» сохранено.")
+        try:
+            app.db.log_owner(app.owner_id, "setting", target=st.key, detail="updated")
+        except Exception:  # noqa: BLE001
+            pass
+        await message.answer(
+            f"✅ «{st.label}» сохранено.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ К настройкам", callback_data="adm:set")],
+                [InlineKeyboardButton(text="⬅️ В панель", callback_data="adm:main")],
+            ]),
+        )
 
     return r

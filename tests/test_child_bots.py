@@ -183,3 +183,28 @@ async def test_owner_user_list_and_ban(tmp_path, bot, session):
     assert app.db.user(A)["clicks"] == 0
     await feed(cb_update(A, "adm:users:0"))
     assert "Пользователи" not in "".join(session.texts())
+
+
+
+async def test_owner_admin_is_private_and_setting_is_logged(tmp_path, bot, session):
+    from aiogram.methods import SendMessage
+
+    from tests.conftest import msg_update
+    app, feed = make(tmp_path, "clicker", bot)
+    group = msg_update(OWNER, "⚙️ Админка", chat={"id": -100123, "type": "group", "title": "g"})
+    await feed(group)
+    assert not any("Панель владельца" in (m or "") for m in session.texts())
+    await feed(msg_update(OWNER, "⚙️ Админка"))
+    assert "Панель владельца" in session.texts()[-1]
+    await feed(cb_update(OWNER, "adm:set"))
+    # pick the first setting button if present, otherwise send a known clicker key via state
+    await feed(cb_update(OWNER, "set:click_reward"))
+    session.clear()
+    await feed(msg_update(OWNER, "7"))
+    last = session.of(SendMessage)[-1]
+    assert "сохранено" in last.text
+    buttons = [(b.text, b.callback_data) for row in last.reply_markup.inline_keyboard for b in row]
+    assert ("⬅️ К настройкам", "adm:set") in buttons
+    assert ("⬅️ В панель", "adm:main") in buttons
+    rows = app.db.owner_actions()
+    assert any(r["action"] == "setting" and r["target"] == "click_reward" for r in rows)

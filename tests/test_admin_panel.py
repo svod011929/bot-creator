@@ -327,3 +327,21 @@ async def test_child_bots_broadcast_preview_confirm_and_access(env, monkeypatch)
             assert "t0" not in (r["detail"] or "") and "TEST" not in (r["detail"] or "")
     done = next(r for r in rows if r["action"] == "broadcast_bots_done")
     assert "delivered=3" in done["detail"]
+
+
+
+async def test_bot_lookup_by_owner_id(env):  # noqa: F811
+    ctx, feed, session = env
+    ids = seed_bots(ctx, 3, owner=OWNER)
+    await feed(msg_update(ADMIN, "/start"))
+    session.clear()
+    await feed(cb_update(ADMIN, "a:botfind"))
+    await feed(msg_update(ADMIN, str(OWNER)))
+    text = session.texts()[-1]
+    assert "Боты владельца" in text and str(OWNER) in text
+    buttons = inline(session.of(SendMessage)[-1])
+    assert any(d == f"a:bot:{ids[0]}" for _, d in buttons)
+    # a numeric bot id still opens the bot card, not the owner list
+    await feed(cb_update(ADMIN, "a:botfind"))
+    await feed(msg_update(ADMIN, str(ids[1])))
+    assert f"Бот ID {ids[1]}" in session.texts()[-1]
