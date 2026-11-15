@@ -601,7 +601,7 @@ async def bots(cb: CallbackQuery, ctx: Ctx) -> None:
 @router.callback_query(F.data == "a:botfind")
 async def bot_find(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Admin.bot_lookup)
-    await cb.message.edit_text("🔎 Пришлите ID бота или его @username:", reply_markup=cancel_kb("a:main"))
+    await cb.message.edit_text("🔎 Пришлите ID бота, ID владельца или @username:", reply_markup=cancel_kb("a:main"))
     await cb.answer()
 
 
@@ -610,11 +610,25 @@ async def bot_lookup(message: Message, state: FSMContext, ctx: Ctx) -> None:
     raw = message.text.strip()
     if re.fullmatch(r"[0-9]{1,18}", raw):
         found = ctx.db.scalar("SELECT id FROM bots WHERE id=? AND deleted=0", int(raw))
+        if not found:
+            owned = ctx.db.all(
+                "SELECT id, username, status, template FROM bots "
+                "WHERE owner_id=? AND deleted=0 ORDER BY id DESC LIMIT 15",
+                int(raw),
+            )
+            if owned:
+                await state.clear()
+                kb = ikb(
+                    *[[btn(f"ID {b['id']} @{b['username'] or '—'}", f"a:bot:{b['id']}")] for b in owned],
+                    [btn("⬅️ Боты", "a:bots")],
+                )
+                await message.answer(f"Боты владельца <code>{raw}</code> ({len(owned)}):", reply_markup=kb)
+                return
     elif re.fullmatch(r"@?[A-Za-z0-9_]{1,64}", raw):
         found = ctx.db.scalar("SELECT id FROM bots WHERE deleted=0 AND username=? COLLATE NOCASE "
                               "ORDER BY id DESC LIMIT 1", raw.lstrip("@"))
     else:
-        await message.answer("Введите числовой ID или @username бота (или /cancel).")
+        await message.answer("Введите ID бота, ID владельца или @username (или /cancel).")
         return
     view = bot_view(ctx, found, "") if found else None
     if not view:
