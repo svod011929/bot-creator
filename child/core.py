@@ -6,6 +6,7 @@ import asyncio
 import html
 import logging
 import math
+import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -181,6 +182,13 @@ class GateMiddleware(BaseMiddleware):
         bot: Bot = data["bot"]
         if user is None:
             return await handler(event, data)
+        # Owner moderation ban (distinct from blocked). Owner is always allowed.
+        if user.id != self.app.owner_id and self.app.db.is_banned(user.id):
+            if isinstance(event, CallbackQuery):
+                await event.answer("Доступ ограничен владельцем бота", show_alert=True)
+            elif isinstance(event, Message):
+                await event.answer("Доступ ограничен владельцем бота.")
+            return None
         if isinstance(event, Message) and (event.text or "").startswith("/start"):
             return await handler(event, data)
         if isinstance(event, CallbackQuery) and event.data in ("chk_sub", TG_CHECK_CB, PF_CHECK_CB):
@@ -217,6 +225,7 @@ class Withdraw(StatesGroup):
 class AdminStates(StatesGroup):
     broadcast = State()
     setting = State()
+    user_lookup = State()
 
 
 async def safe_send(bot: Bot, chat_id: int, text: str, **kw: Any) -> bool:
@@ -445,14 +454,49 @@ def admin_kb(app: ChildApp) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:bc")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm:set"),
          InlineKeyboardButton(text="💸 Заявки", callback_data="adm:wd")],
+        [InlineKeyboardButton(text="👤 Пользователи", callback_data="adm:users:0")],
+        [InlineKeyboardButton(text="📜 Журнал", callback_data="adm:olog:0")],
     ]
     link = subscription_link(app)
     if link:
         rows.extend(link.inline_keyboard)
     for text, data in getattr(app.template, "ADMIN_BUTTONS", []):
         rows.append([InlineKeyboardButton(text=text, callback_data=data)])
+    # Deep links into constructor for tools that live there
+    creator = str(app.cfg.get("creator_username") or "")
+    bot_id = app.cfg.get("bot_id")
+    if creator and bot_id:
+        tpl = app.info.key if hasattr(app.info, "key") else ""
+        extras = []
+        if tpl == "clicker":
+            extras.append(("🎯 События", f"https://t.me/{creator}?start=events_{bot_id}"))
+        elif tpl == "refbot":
+            extras.append(("🤝 Команды", f"https://t.me/{creator}?start=teams_{bot_id}"))
+        elif tpl == "starbot":
+            extras.append(("📚 Треки", f"https://t.me/{creator}?start=tracks_{bot_id}"))
+        extras.append(("🎨 Оформление", f"https://t.me/{creator}?start=pres_{bot_id}"))
+        for label, url in extras:
+            rows.append([InlineKeyboardButton(text=label, url=url)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def _user_card_text(app, u) -> str:
+    created = time.strftime("%Y-%m-%d", time.localtime(u["created_at"])) if u["created_at"] else "—"
+    return (
+        f"👤 <b>{html.escape(u['full_name'] or '')}</b> "
+        f"{('@' + html.escape(u['username'])) if u['username'] else ''}\n"
+        f"ID: <code>{u['id']}</code>\nБаланс: {fmt(u['balance'])}\n"
+        f"Регистрация: {created}\n"
+        f"blocked: {'да' if u['blocked'] else 'нет'}\n"
+        f"Статус: {'🚫 забанен' if u['banned'] else '✅ активен'}"
+    )
+
+def _user_card_kb(u) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Разбанить" if u["banned"] else "🚫 Забанить",
+                              callback_data=f"adm:ban:{u['id']}")],
+        [InlineKeyboardButton(text="⬅️ К списку", callback_data="adm:users:0")],
+    ])
 
 def build_admin_router(app: ChildApp) -> Router:
     r = Router(name="owner-admin")
@@ -470,11 +514,10 @@ def build_admin_router(app: ChildApp) -> Router:
     @r.callback_query(F.data == "adm:stats")
     async def stats(cb: CallbackQuery) -> None:
         from child.withdrawals import format_unit
-
         s = app.db.stats()
         paid = app.db.paid_by_unit()
         lines = [f"• {fmt(total)} {format_unit(unit)}" for unit, _, total in paid]
-        await cb.message.answer(
+        text = (
             f"📊 <b>Статистика</b>\n\n👥 Пользователей: {s['users']}\n"
             f"🆕 Сегодня (с 00:00 по времени сервера): {s['today']}\n"
             f"🚫 Недоступны для рассылки: {s['blocked']}\n⏳ Заявок на вывод: {s['pending']}\n"
@@ -483,6 +526,127 @@ def build_admin_router(app: ChildApp) -> Router:
             + "\n\n<i>Суммы — по единице, сохранённой в каждой заявке; это ручные отметки, не подтверждение перевода.</i>"
             + (app.template.admin_stats_extra(app) if hasattr(app.template, "admin_stats_extra") else "")
         )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")]])
+        await cb.message.edit_text(text, reply_markup=kb)
+        await cb.answer()
+
+    @r.callback_query(F.data == "adm:main")
+    async def admin_main(cb: CallbackQuery) -> None:
+        await cb.message.edit_text("⚙️ <b>Панель владельца</b>", reply_markup=admin_kb(app))
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("adm:users:"))
+    async def users_list(cb: CallbackQuery) -> None:
+        parts = cb.data.split(":")
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        PAGE = 8
+        total = app.db.user_count()
+        pages = max(1, -(-total // PAGE))
+        page = max(0, min(page, pages - 1))
+        rows = app.db.user_list(limit=PAGE, offset=page * PAGE)
+        lines = [f"👤 <b>Пользователи</b> · стр. {page + 1}/{pages} · всего {total}"]
+        kb_rows = []
+        for r in rows:
+            mark = "🚫" if r["banned"] else "✅"
+            name = (r["username"] and f"@{r['username']}") or (r["full_name"] or str(r["id"]))
+            kb_rows.append([InlineKeyboardButton(text=f"{mark} {name[:22]}", callback_data=f"adm:u:{r['id']}")])
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm:users:{page - 1}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"adm:users:{page + 1}"))
+        if nav:
+            kb_rows.append(nav)
+        kb_rows.append([InlineKeyboardButton(text="🔎 Поиск", callback_data="adm:usearch")])
+        kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")])
+        await cb.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+        await cb.answer()
+
+    @r.callback_query(F.data == "adm:usearch")
+    async def user_search_start(cb: CallbackQuery, state: FSMContext) -> None:
+        await state.set_state(AdminStates.user_lookup)
+        await cb.message.edit_text("🔎 Пришлите ID или @username:", reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:users:0")]]))
+        await cb.answer()
+
+    @r.message(AdminStates.user_lookup, F.text)
+    async def user_search(message: Message, state: FSMContext) -> None:
+        raw = message.text.strip().lstrip("@")
+        rows = app.db.user_list(limit=5, search=raw)
+        if not rows:
+            await message.answer("Не найдено. Попробуйте ещё или /cancel.")
+            return
+        await state.clear()
+        if len(rows) == 1:
+            u = rows[0]
+            await message.answer(_user_card_text(app, u), reply_markup=_user_card_kb(u))
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"ID {r['id']}", callback_data=f"adm:u:{r['id']}")] for r in rows
+        ] + [[InlineKeyboardButton(text="⬅️ К списку", callback_data="adm:users:0")]])
+        await message.answer("Найдено несколько:", reply_markup=kb)
+
+    @r.callback_query(F.data.startswith("adm:u:"))
+    async def user_open(cb: CallbackQuery) -> None:
+        raw = cb.data.split(":")[-1]
+        if not raw.isdigit():
+            await cb.answer("Кнопка устарела", show_alert=True)
+            return
+        u = app.db.one("SELECT * FROM users WHERE id=?", int(raw))
+        if not u:
+            await cb.answer("Не найден", show_alert=True)
+            return
+        await cb.message.edit_text(_user_card_text(app, u), reply_markup=_user_card_kb(u))
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("adm:ban:"))
+    async def user_ban(cb: CallbackQuery) -> None:
+        raw = cb.data.split(":")[-1]
+        if not raw.isdigit():
+            await cb.answer("Кнопка устарела", show_alert=True)
+            return
+        uid = int(raw)
+        if uid == app.owner_id:
+            await cb.answer("Нельзя забанить владельца", show_alert=True)
+            return
+        u = app.db.one("SELECT banned FROM users WHERE id=?", uid)
+        if not u:
+            await cb.answer("Не найден", show_alert=True)
+            return
+        new_banned = not bool(u["banned"])
+        app.db.set_banned(uid, new_banned)
+        app.db.log_owner(app.owner_id, "ban" if new_banned else "unban",
+                         target=str(uid), detail="banned" if new_banned else "unbanned")
+        u = app.db.one("SELECT * FROM users WHERE id=?", uid)
+        await cb.message.edit_text(_user_card_text(app, u), reply_markup=_user_card_kb(u))
+        await cb.answer()
+
+
+    @r.callback_query(F.data.startswith("adm:olog:"))
+    async def owner_log(cb: CallbackQuery) -> None:
+        parts = cb.data.split(":")
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        PAGE = 8
+        total = app.db.owner_actions_count()
+        pages = max(1, -(-total // PAGE))
+        page = max(0, min(page, pages - 1))
+        rows = app.db.owner_actions(limit=PAGE, offset=page * PAGE)
+        lines = [f"📜 <b>Журнал действий</b> · стр. {page + 1}/{pages} · всего {total}"]
+        for r in rows:
+            when = time.strftime("%m-%d %H:%M", time.localtime(r["created_at"]))
+            detail = html.escape((r['detail'] or '')[:40])
+            lines.append(f"{when} · {html.escape(r['action'])} · {html.escape(r['target'] or '')} · {detail}")
+        if not rows:
+            lines.append("Пусто")
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm:olog:{page - 1}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"adm:olog:{page + 1}"))
+        kb = InlineKeyboardMarkup(inline_keyboard=(
+            ([nav] if nav else []) + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")]]
+        ))
+        await cb.message.edit_text("\n".join(lines), reply_markup=kb)
         await cb.answer()
 
     @r.callback_query(F.data == "adm:bc")
@@ -494,16 +658,35 @@ def build_admin_router(app: ChildApp) -> Router:
         await cb.answer()
 
     @r.message(AdminStates.broadcast, F.text != "/cancel", ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
-    async def bc_send(message: Message, state: FSMContext) -> None:
-        await state.clear()
+    async def bc_preview(message: Message, state: FSMContext) -> None:
         ids = app.db.active_ids()
-        await message.answer(f"🚀 Рассылка запущена на {len(ids)} пользователей.")
+        await state.update_data(bc_chat=message.chat.id, bc_msg=message.message_id, bc_n=len(ids))
+        await message.answer(
+            f"👁 Предпросмотр. Отправить {len(ids)} пользователям?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"✅ Отправить {len(ids)}", callback_data="adm:bcgo")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:main")],
+            ]),
+        )
+
+    @r.callback_query(F.data == "adm:bcgo")
+    async def bc_send(cb: CallbackQuery, state: FSMContext) -> None:
+        data = await state.get_data()
+        await state.clear()
+        chat_id = data.get("bc_chat")
+        msg_id = data.get("bc_msg")
+        if not chat_id or not msg_id:
+            await cb.answer("Сначала пришлите сообщение", show_alert=True)
+            return
+        ids = app.db.active_ids()
+        await cb.message.edit_text(f"🚀 Рассылка запущена на {len(ids)} пользователей.")
+        await cb.answer()
 
         async def run() -> None:
             ok = fail = 0
             for uid in ids:
                 try:
-                    await message.copy_to(uid)
+                    await cb.bot.copy_message(uid, chat_id, msg_id)
                     ok += 1
                 except TelegramRetryAfter as e:
                     await asyncio.sleep(e.retry_after)
@@ -513,25 +696,40 @@ def build_admin_router(app: ChildApp) -> Router:
                 except Exception:  # noqa: BLE001
                     fail += 1
                 await asyncio.sleep(0.05)
-            await safe_send(message.bot, app.owner_id, f"✅ Рассылка завершена: доставлено {ok}, ошибок {fail}.")
+            await safe_send(cb.bot, app.owner_id, f"✅ Рассылка завершена: доставлено {ok}, ошибок {fail}.")
 
         asyncio.create_task(run())
 
     @r.callback_query(F.data == "adm:set")
+    @r.callback_query(F.data.startswith("adm:set:"))
     async def settings(cb: CallbackQuery) -> None:
-        lines = ["⚙️ <b>Настройки</b>\n"]
+        parts = cb.data.split(":")
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        items = [st for st in app.info.settings if st.key not in {"required_channel", "channel_url"}]
+        PAGE = 6
+        total = len(items)
+        pages = max(1, -(-total // PAGE))
+        page = max(0, min(page, pages - 1))
+        slice_ = items[page * PAGE:(page + 1) * PAGE]
+        lines = [f"⚙️ <b>Настройки</b> · стр. {page + 1}/{pages}"]
         rows = []
-        for st in app.info.settings:
-            if st.key in {"required_channel", "channel_url"}:
-                continue
+        for st in slice_:
             lines.append(f"• {st.label}: <code>{html.escape(st.show(app.s.get(st.key)))}</code>")
             rows.append([InlineKeyboardButton(text=st.label, callback_data=f"set:{st.key}")])
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm:set:{page - 1}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"adm:set:{page + 1}"))
+        if nav:
+            rows.append(nav)
         link = subscription_link(app)
-        if link:
+        if link and page == 0:
             rows.extend(link.inline_keyboard)
-        else:
+        elif page == 0 and not link:
             lines.append("Переход к мастеру подписки недоступен; откройте бота в конструкторе.")
-        await cb.message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")])
+        await cb.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         await cb.answer()
 
     @r.callback_query(F.data.startswith("set:"))

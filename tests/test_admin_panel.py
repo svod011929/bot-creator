@@ -76,7 +76,8 @@ async def test_non_admin_and_removed_admin_get_nothing(env):  # noqa: F811
     session.clear()
     for upd in (msg_update(OWNER, ADMIN_BTN), msg_update(OWNER, "/admin"), cb_update(OWNER, "a:main"),
                 cb_update(OWNER, "a:bots:0"), cb_update(OWNER, "a:bot:1"), cb_update(OWNER, f"a:user:{OWNER}"),
-                cb_update(OWNER, "a:botfind")):
+                cb_update(OWNER, "a:botfind"), cb_update(OWNER, "a:ulist:0:all"), cb_update(OWNER, "a:alog:0"),
+                cb_update(OWNER, "a:lave:0"), cb_update(OWNER, "a:bots:0:deleted")):
         await feed(upd)
     assert not any("Админ" in (t or "") or "Бот ID" in (t or "") for t in session.texts())
     await feed(msg_update(ADMIN, "/admin"))
@@ -168,3 +169,66 @@ async def test_owner_and_bot_cross_links_are_read_only(env):  # noqa: F811
     for bad in ("a:user:x", "a:bot:x", "a:bot:", "a:bot:1:zzz:1"):
         await feed(cb_update(ADMIN, bad))
     assert snapshot(ctx) == before
+
+
+async def test_user_catalog_filters_and_journal(env):  # noqa: F811
+    ctx, feed, session = env
+    ctx.db.upsert_user(OWNER, "ownerx", "Owner X")
+    ctx.db.change_balance(OWNER, 10000, "test", "seed")
+    ctx.db.set_banned(OWNER, True)
+    ctx.db.log_admin(ADMIN, "ban", target=str(OWNER), detail="test")
+    await feed(msg_update(ADMIN, "/start"))
+    session.clear()
+    await feed(cb_update(ADMIN, "a:users"))
+    assert "Пользователи" in session.texts()[-1]
+    await feed(cb_update(ADMIN, "a:ulist:0:banned"))
+    assert "забаненные" in session.texts()[-1]
+    await feed(cb_update(ADMIN, f"a:user:{OWNER}"))
+    assert "забанен" in session.texts()[-1]
+    await feed(cb_update(ADMIN, "a:alog:0"))
+    assert "Журнал" in session.texts()[-1]
+    assert str(OWNER) in session.texts()[-1]
+
+
+
+async def test_bot_filters_and_deleted_are_view_only(env):  # noqa: F811
+    ctx, feed, session = env
+    ids = seed_bots(ctx, 2)
+    ctx.db.delete_bot(ids[0])
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:bots:0:clicker"))
+    assert "кликер" in session.of(EditMessageText)[-1].text
+    await feed(cb_update(ADMIN, "a:bots:0:deleted"))
+    text = session.of(EditMessageText)[-1].text
+    assert "удалённые" in text
+    await feed(cb_update(ADMIN, f"a:bot:{ids[0]}"))
+    assert session.of(AnswerCallbackQuery)[-1].text == "Не найден"
+    assert ctx.db.bot(ids[0]) is None
+
+
+async def test_lavepay_summary_hides_keys(env):  # noqa: F811
+    from creator.secretbox import box_for, encrypt
+    ctx, feed, session = env
+    await feed(msg_update(ADMIN, "/start"))
+    blob = encrypt(box_for(ctx.cfg.data_dir, ""), "LAVE-99-k8Vn3pQxxxxxxxxxxxxxxxxxxxx")
+    ctx.db.upsert_owner_lavepay_shop(
+        1, OWNER, blob, merchant_id=99, merchant_name="ShopOne", status="active",
+        payouts_enabled=True, usdt_balance="12.5",
+    )
+    session.clear()
+    await feed(cb_update(ADMIN, "a:lave:0"))
+    text = session.texts()[-1]
+    assert "ShopOne" in text and "12.5" in text
+    assert "LAVE-" not in text and "k8Vn" not in text and "key_blob" not in text
+    assert "не показываются" in text
+
+
+async def test_user_history_and_balance_refresh(env):  # noqa: F811
+    ctx, feed, session = env
+    ctx.db.upsert_user(OWNER, "ownerx", "Owner X")
+    ctx.db.change_balance(OWNER, 5000, "test", "seed")
+    await feed(msg_update(ADMIN, "/start"))
+    await feed(cb_update(ADMIN, f"a:user:{OWNER}"))
+    await feed(cb_update(ADMIN, f"a:uhist:{OWNER}:0"))
+    assert "История операций" in session.texts()[-1]
+    assert "seed" in session.texts()[-1]
