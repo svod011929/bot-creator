@@ -35,6 +35,10 @@ class ContentInput(StatesGroup):
     active = State()
 
 
+class PresentationInput(StatesGroup):
+    value = State()
+
+
 class Withdraw(StatesGroup):
     details = State()
     amount = State()

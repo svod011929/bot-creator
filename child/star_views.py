@@ -108,6 +108,7 @@ def home(app, uid):
         [button("📚 Три карточки дня", "sky:deck"), button("🧠 Тренировка памяти", f"sky:memory:{s['day']}")],
         [button("🎯 Миссии", "sky:missions:day"), button("🌠 Карта созвездий", "sky:map")],
         [button("🏆 Рейтинг искр", "sky:rank:month"), button("🏅 Достижения", "sky:achievements")],
+        [button("🧭 Тематические маршруты", "trk:list:0")],
         [button("🔄 Обновить маршрут", "sky:home")],
     ]
     if is_owner(app, uid):
@@ -247,7 +248,7 @@ def achievements_view(app, uid):
     lines += ["", "📜 Последние изменения искр:"]
     kinds = {"visit": "Отметка дня", "card": "Карточка", "memory": "Память", "mission": "Миссия", "build": "Созвездие"}
     lines += [f"{kinds[r['kind']]} · {r['delta']:+d} искр" for r in s["history"]]
-    return "\n".join(lines), markup([back()])
+    return "\n".join(lines), markup([[button("🏅 Значки маршрутов", "trk:awards:0")], back()])
 
 
 def admin_list(app, uid, page):

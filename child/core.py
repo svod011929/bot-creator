@@ -62,6 +62,7 @@ class ChildApp:
         self.sky = self.template.create_journey(self) if hasattr(self.template, "create_journey") else None
         self.events = self.template.create_events(self) if hasattr(self.template, "create_events") else None
         self.teams = self.template.create_teams(self) if hasattr(self.template, "create_teams") else None
+        self.tracks = self.template.create_tracks(self) if hasattr(self.template, "create_tracks") else None
         self.username: str = self.cfg.get("username") or ""
         self._settings: dict[str, Any] = {}
         self._mtime: float = -1
@@ -266,6 +267,12 @@ def build_core_router(app: ChildApp) -> Router:
         private_observation(app, message, uid, "access")
         text = html.escape(str(app.s.get("welcome", "Добро пожаловать!"))) + app.footer()
         await message.answer(text, reply_markup=app.menu(uid))
+        if message.chat.type == "private" and message.chat.id == uid:
+            from child.presentation import runtime_guide
+
+            launch = runtime_guide(app)
+            if launch:
+                await message.answer(launch[0], reply_markup=launch[1])
 
     async def enter_after_check(message: Message, uid: int, result: GateResult) -> None:
         if not result.allowed:

@@ -19,13 +19,16 @@ from child.referral_teams import SCHEMA as TEAM_SCHEMA
 from child.referral_teams import ReferralTeams
 from child.star_journey import EDITOR_FIELDS, StarJourney
 from child.star_journey import SCHEMA as STAR_SCHEMA
+from child.star_tracks import FIELDS as TRACK_FIELDS
+from child.star_tracks import SCHEMA as TRACK_SCHEMA
+from child.star_tracks import StarTracks
 from creator.bot_setup import MAX_JSON, TOKEN_LIKE, _read_object
 
-KINDS = {"r": "refbot", "s": "starbot", "c": "clicker"}
-CODES = {value: key for key, value in KINDS.items()}
-SCHEMAS = {"r": CLUB_SCHEMA, "s": STAR_SCHEMA, "c": EVENT_SCHEMA}
-ENGINES = {"r": ReferralClub, "s": StarJourney, "c": ClickerEvents}
-FORM_FIELDS = {"r": WIZARD_FIELDS, "s": EDITOR_FIELDS, "c": EVENT_FIELDS}
+KINDS = {"r": "refbot", "s": "starbot", "c": "clicker", "t": "starbot"}
+CODES = {"refbot": "r", "starbot": "s", "clicker": "c"}
+SCHEMAS = {"r": CLUB_SCHEMA, "s": STAR_SCHEMA, "c": EVENT_SCHEMA, "t": TRACK_SCHEMA}
+ENGINES = {"r": ReferralClub, "s": StarJourney, "c": ClickerEvents, "t": StarTracks}
+FORM_FIELDS = {"r": WIZARD_FIELDS, "s": EDITOR_FIELDS, "c": EVENT_FIELDS, "t": TRACK_FIELDS}
 FORM_SCHEMA = """CREATE TABLE IF NOT EXISTS creator_content_forms (
     owner_id INTEGER PRIMARY KEY,
     bot_id INTEGER NOT NULL,
@@ -65,8 +68,11 @@ def decode(value):
     return result
 
 
-def callback(row, action):
-    value = f"cnt:{encode(row['id'])}:{CODES[row['template']]}:{action}"
+def callback(row, action, *, code=None):
+    code = code or CODES[row["template"]]
+    if KINDS.get(code) != row["template"]:
+        raise ContentError("Откройте каталог заново.")
+    value = f"cnt:{encode(row['id'])}:{code}:{action}"
     if len(value.encode()) > 64:
         raise ContentError("Откройте список контента заново.")
     return value
@@ -128,6 +134,8 @@ def open_content(ctx, uid, bot_id, code, *, write=False, prepare=False):
             if prepare and not ready:
                 if not write:
                     raise ContentError(UNAVAILABLE)
+                if code == "t" and (not db or not db.one("SELECT 1 FROM sqlite_master WHERE name='star_cards'")):
+                    raise ContentError("Сначала подготовьте каталог карточек в «Созвездиях».")
                 if db:
                     db.conn.close()
                 db = ChildDB(file)
@@ -182,7 +190,14 @@ class Content:
 
     @property
     def proxy(self):
-        return SimpleNamespace(club=self, sky=self, events=self)
+        return SimpleNamespace(club=self, sky=self, events=self, tracks=self)
+
+    @property
+    def form_table(self):
+        return "creator_track_forms" if self.code == "t" else "creator_content_forms"
+
+    def cb(self, action):
+        return callback(self.row, action, code=self.code)
 
     def clean(self, value):
         if isinstance(value, str):
@@ -196,8 +211,42 @@ class Content:
         return value
 
     def owner_data(self, cid):
-        method = {"r": "owner_campaign", "s": "owner_card", "c": "owner_event"}[self.code]
+        method = {"r": "owner_campaign", "s": "owner_card", "c": "owner_event", "t": "owner_track"}[self.code]
         return getattr(self.engine, method)(self.uid, cid)
+
+    def owner_track(self, actor, tid):
+        return self.clean(self.engine.owner_track(actor, tid))
+
+    def list_tracks(self, actor, page=0, **kwargs):
+        return self.clean(self.engine.list_tracks(actor, page, **kwargs))
+
+    def sources(self, actor, page=0):
+        return self.clean(self.engine.sources(actor, page))
+
+    def selected(self, actor, cards):
+        return self.clean(self.engine.selected(actor, cards))
+
+    def track_pick(self, cid, version):
+        with self.db.tx():
+            form = self._form_version(version)
+            if self.code != "t" or form["step"] != "cards":
+                raise ContentError("Откройте шаг выбора этапов.")
+            data = form["data"]
+            chosen = data.get("cards", [])
+            if cid in chosen:
+                chosen.remove(cid)
+            else:
+                self.engine.source(self.uid, cid)
+                if len(chosen) >= 12:
+                    raise ContentError("В маршруте может быть не больше 12 этапов.")
+                chosen.append(cid)
+            data["cards"] = chosen
+            self.db.exec(
+                f"UPDATE {self.form_table} SET payload_json=?,version=version+1,updated_at=? WHERE owner_id=?",
+                json.dumps(data, ensure_ascii=False),
+                self.now_value(),
+                self.uid,
+            )
 
     def owner_event(self, actor, cid):
         return self.clean(self.engine.owner_event(actor, cid))
@@ -218,9 +267,9 @@ class Content:
         return self.clean(self.engine.list_cards(actor, page))
 
     def form_get(self):
-        if not self.db or not self.db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='creator_content_forms'"):
+        if not self.db or not self.db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", self.form_table):
             return None
-        form = self.db.one("SELECT * FROM creator_content_forms WHERE owner_id=?", self.uid)
+        form = self.db.one(f"SELECT * FROM {self.form_table} WHERE owner_id=?", self.uid)
         if not form:
             return None
         if form["bot_id"] != self.row["id"] or form["template"] != self.row["template"]:
@@ -238,7 +287,7 @@ class Content:
     def form_begin(self, cid=None, revision=None):
         with self.db.tx():
             self.engine._owner(self.uid)
-            self.db.exec(FORM_SCHEMA)
+            self.db.exec(FORM_SCHEMA.replace("creator_content_forms", self.form_table))
             old = self.form_get()
             if old:
                 if cid is not None and old["target_id"] != cid:
@@ -251,7 +300,7 @@ class Content:
                     raise ContentError("Редактировать можно только актуальный неопубликованный черновик.")
                 data, step = {field: self.clean(c[field]) for field in self.fields}, "confirm"
             self.db.exec(
-                "INSERT INTO creator_content_forms(owner_id,bot_id,template,target_id,target_revision,step,"
+                f"INSERT INTO {self.form_table}(owner_id,bot_id,template,target_id,target_revision,step,"
                 "payload_json,version,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 self.uid,
                 self.row["id"],
@@ -286,7 +335,7 @@ class Content:
             if form["step"] != "confirm" or field not in self.fields:
                 raise ContentError("Откройте предпросмотр формы заново.")
             self.db.exec(
-                "UPDATE creator_content_forms SET step=?,edit_field=1,version=version+1,updated_at=? WHERE owner_id=?",
+                f"UPDATE {self.form_table} SET step=?,edit_field=1,version=version+1,updated_at=? WHERE owner_id=?",
                 field,
                 self.now_value(),
                 self.uid,
@@ -308,7 +357,7 @@ class Content:
             if len(payload.encode()) > MAX_JSON:
                 raise ContentError("Текст слишком большой.")
             self.db.exec(
-                "UPDATE creator_content_forms SET step=?,payload_json=?,edit_field=0,version=version+1,updated_at=? "
+                f"UPDATE {self.form_table} SET step=?,payload_json=?,edit_field=0,version=version+1,updated_at=? "
                 "WHERE owner_id=?",
                 step,
                 payload,
@@ -327,10 +376,10 @@ class Content:
                 cid = self.engine.create_draft(self.uid, form["data"])
             else:
                 self.engine.update_draft(self.uid, cid, form["target_revision"], form["data"])
-            self.db.exec("DELETE FROM creator_content_forms WHERE owner_id=?", self.uid)
+            self.db.exec(f"DELETE FROM {self.form_table} WHERE owner_id=?", self.uid)
             return cid
 
     def form_discard(self, version):
         with self.db.tx():
             self._form_version(version)
-            self.db.exec("DELETE FROM creator_content_forms WHERE owner_id=?", self.uid)
+            self.db.exec(f"DELETE FROM {self.form_table} WHERE owner_id=?", self.uid)
