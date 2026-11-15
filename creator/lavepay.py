@@ -1,4 +1,4 @@
-"""LavePay (laveshka.io): счета в $, оплата по ссылке, опрос статуса и подписанный вебхук.
+"""LavePay (laveshka.io): счета в $, оплата по ссылке, опрос статуса, подписанный вебхук и выплаты.
 
 Документация: https://laveshka.io/docs/lave-pay
 - POST /invoices {amount (USD строкой), description, order_id, payload, ttl} -> {id, pay_url, status, ...}
@@ -64,9 +64,15 @@ class LavePayClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def request(self, method: str, path: str, body: dict | None = None) -> Any:
+    async def request(self, method: str, path: str, body: dict | None = None,
+                      params: dict | None = None) -> Any:
         s = await self._sess()
-        async with s.request(method, self.base_url + path, json=body) as r:
+        kwargs: dict[str, Any] = {}
+        if body is not None:
+            kwargs["json"] = body
+        if params:
+            kwargs["params"] = params
+        async with s.request(method, self.base_url + path, **kwargs) as r:
             try:
                 data = await r.json(content_type=None)
             except (json.JSONDecodeError, aiohttp.ContentTypeError):
@@ -92,6 +98,57 @@ class LavePayClient:
 
     async def cancel_invoice(self, invoice_id: str) -> dict:
         return await self.request("POST", f"/invoices/{invoice_id}/cancel")
+
+    async def card_rate(self, amount_rub: int | None = None) -> dict:
+        params = {"amount_rub": str(int(amount_rub))} if amount_rub is not None else None
+        return await self.request("GET", "/card/rate", params=params)
+
+    async def sbp_rate(self, amount_rub: int | None = None) -> dict:
+        params = {"amount_rub": str(int(amount_rub))} if amount_rub is not None else None
+        return await self.request("GET", "/sbp/rate", params=params)
+
+    async def sbp_banks(self) -> dict:
+        return await self.request("GET", "/sbp/banks")
+
+    async def withdrawals_networks(self) -> dict:
+        return await self.request("GET", "/withdrawals/networks")
+
+    async def withdrawals_quote(self, asset: str, network: str, amount: str) -> dict:
+        return await self.request("GET", "/withdrawals/quote",
+                                  params={"asset": asset, "network": network, "amount": amount})
+
+    async def create_card_payout(self, card_number: str, amount_rub: int, idempotency_key: str,
+                                 max_debit: str | None = None) -> dict:
+        body = {"card_number": card_number, "amount_rub": str(int(amount_rub)),
+                "idempotency_key": idempotency_key}
+        if max_debit:
+            body["max_debit"] = str(max_debit)
+        return await self.request("POST", "/card/payouts", body)
+
+    async def create_sbp_payout(self, phone: str, bank_id: str, recipient_name: str, amount_rub: int,
+                                idempotency_key: str, max_debit: str | None = None) -> dict:
+        body = {"phone": phone, "bank_id": bank_id, "recipient_name": recipient_name,
+                "amount_rub": str(int(amount_rub)), "idempotency_key": idempotency_key}
+        if max_debit:
+            body["max_debit"] = str(max_debit)
+        return await self.request("POST", "/sbp/payouts", body)
+
+    async def create_chain_withdrawal(self, asset: str, network: str, address: str, amount: str,
+                                      idempotency_key: str, max_debit: str | None = None) -> dict:
+        body = {"asset": asset, "network": network, "address": address, "amount": amount,
+                "idempotency_key": idempotency_key}
+        if max_debit:
+            body["max_debit"] = str(max_debit)
+        return await self.request("POST", "/withdrawals", body)
+
+    async def get_card_payout(self, ident: str) -> dict:
+        return await self.request("GET", f"/card/payouts/{ident}")
+
+    async def get_sbp_payout(self, ident: str) -> dict:
+        return await self.request("GET", f"/sbp/payouts/{ident}")
+
+    async def get_chain_withdrawal(self, ident: str) -> dict:
+        return await self.request("GET", f"/withdrawals/{ident}")
 
 
 def verify_signature(secret: str, timestamp: str, raw_body: bytes, signature: str, *, now: float | None = None,
@@ -138,6 +195,7 @@ class LavePayService:
         self.notify = notify
         self.webhook_secret = webhook_secret
         self._lock = asyncio.Lock()
+        self.payouts = None
 
     @property
     def enabled(self) -> bool:
@@ -312,6 +370,11 @@ class LavePayService:
             if row and self._record(row["id"], data):
                 # Commit the receipt BEFORE returning 200. Background work is recoverable from SQLite.
                 asyncio.get_running_loop().create_task(self._resume_safe(row["id"]))
+        payouts = getattr(self, "payouts", None)
+        if payouts is not None and isinstance(etype, str) and isinstance(data, dict):
+            recorded = payouts.record_event(etype, data)
+            if recorded:
+                asyncio.get_running_loop().create_task(payouts.notify_recorded(recorded))
         return web.json_response({"ok": True})
 
     async def _resume_safe(self, local_id: int) -> None:

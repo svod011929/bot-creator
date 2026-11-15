@@ -19,7 +19,8 @@ from child.db import fmt
 from child.files import read_config
 
 SCOPES = {'mine': '📜 Мои заявки', 'pending': '💸 Ожидают', 'completed': '💸 Завершённые'}
-STATUSES = {'pending': 'Ожидает', 'paid': 'Отмечена выплаченной', 'rejected': 'Отклонена'}
+STATUSES = {'pending': 'Ожидает', 'paid': 'Отмечена выплаченной',
+            'rejected': 'Отклонена', 'failed': 'Выплата не прошла, средства возвращены'}
 EMPTY = {'mine': 'У вас пока нет заявок', 'pending': 'Ожидающих заявок нет',
          'completed': 'Завершённых заявок пока нет'}
 STALE = 'Действие устарело, откройте историю заново'
@@ -123,13 +124,29 @@ async def show_detail(cb: CallbackQuery, app: ChildApp, scope: str, page: int, w
              f'Обработка: {processed}']
     if scope != 'mine':
         lines.append(f"Заявитель: <code>{w['user_id']}</code>")
-    if w['status'] == 'paid' or (scope != 'mine' and w['status'] == 'pending'):
+    job = app.db.payout_job(w['id'])
+    if job:
+        labels = {'awaiting_approval': 'ждёт подтверждения владельца', 'queued': 'в очереди LavePay',
+                  'submitted': 'отправляется через LavePay', 'completed': 'LavePay выплатил',
+                  'failed': 'LavePay не выплатил', 'cancelled': 'отменена'}
+        lines.append(f"LavePay: {labels.get(job['status'], job['status'])}")
+        if job['debit']:
+            lines.append(f"Списание с мерчанта: {html.escape(str(job['debit']))}")
+    elif w['status'] == 'paid' or (scope != 'mine' and w['status'] == 'pending'):
         lines.append('«Отмечена выплаченной» — ручная отметка владельца, не подтверждение денежного перевода.')
     details = w['details'] or ''
     lines.append(f"Реквизиты: <code>{html.escape(details[:600])}{'…' if len(details) > 600 else ''}</code>")
     rows = []
     if scope != 'mine' and w['status'] == 'pending':
-        rows.append([button('✅ Отметить выплаченной', f'wd:ok:{wid}:{page}'), button('❌ Отклонить', f'wd:no:{wid}:{page}')])
+        if job and job['status'] == 'submitted':
+            pass
+        elif job and job['status'] in ('awaiting_approval', 'queued'):
+            approve = []
+            if job['status'] == 'awaiting_approval':
+                approve = [button('✅ Выплатить через LavePay', f'wd:ok:{wid}:{page}')]
+            rows.append(approve + [button('❌ Отклонить', f'wd:no:{wid}:{page}')])
+        else:
+            rows.append([button('✅ Отметить выплаченной', f'wd:ok:{wid}:{page}'), button('❌ Отклонить', f'wd:no:{wid}:{page}')])
     rows.append([button('К списку', f'wh:list:{scope}:{page}')])
     rows.append([button('К профилю', 'wh:profile') if scope == 'mine' else button('К админке', 'wh:admin')])
     await render(cb, '\n'.join(lines), rows)
@@ -181,13 +198,22 @@ def build_history_router(app: ChildApp) -> Router:
             await cb.answer('Заявка недоступна', show_alert=True)
             return
         if action == 'resolve':
-            w = app.db.resolve_withdrawal(wid, parts[1] == 'ok')
-            if not w:
+            from child.payout_flow import owner_resolve
+            action_name, w = owner_resolve(app, wid, parts[1] == 'ok')
+            if action_name in {'already', 'missing'} or not w:
                 await cb.answer('Заявка уже обработана', show_alert=True)
+            elif action_name == 'in_flight':
+                await cb.answer('Выплата уже отправлена в LavePay. Дождитесь результата.', show_alert=True)
             else:
                 await cb.answer()
-                text = (f"✅ Владелец бота отметил заявку на вывод №{w['id']} как выплаченную." if parts[1] == 'ok'
-                        else f"❌ Заявка на вывод №{w['id']} отклонена владельцем, средства возвращены на баланс.")
+                if action_name == 'enqueued':
+                    text = (f"✅ Владелец бота подтвердил заявку на вывод №{w['id']}. "
+                            "Выплата отправляется через LavePay.")
+                elif parts[1] == 'ok':
+                    text = f"✅ Владелец бота отметил заявку на вывод №{w['id']} как выплаченную."
+                else:
+                    text = (f"❌ Заявка на вывод №{w['id']} отклонена владельцем, "
+                            "средства возвращены на баланс.")
                 # Existing notification, only on the first actual decision. No notifications on reads.
                 await safe_send(cb.bot, w['user_id'], text)
             # Notification is an await: revalidate after it before rendering sensitive details.

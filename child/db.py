@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from child.payouts import idempotency_key as payout_idempotency_key
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
@@ -96,9 +98,35 @@ class ChildDB:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(withdrawals)")}
-            for name, kind in (("currency_at_request", "TEXT"), ("resolved_at", "INTEGER")):
+            for name, kind in (("currency_at_request", "TEXT"), ("resolved_at", "INTEGER"), ("method", "TEXT")):
                 if name not in columns:
                     self.conn.execute(f"ALTER TABLE withdrawals ADD COLUMN {name} {kind}")
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS payout_jobs (
+                    withdrawal_id INTEGER PRIMARY KEY,
+                    method TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    destination TEXT NOT NULL,
+                    amount_rub INTEGER,
+                    amount_asset TEXT,
+                    provider_id TEXT,
+                    debit TEXT,
+                    error TEXT,
+                    result_json TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    submitted_at INTEGER,
+                    completed_at INTEGER
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_payout_jobs_status ON payout_jobs(status, next_attempt_at)"
+            )
             self.conn.execute("COMMIT")
         except BaseException:
             self.conn.execute("ROLLBACK")
@@ -230,26 +258,212 @@ class ChildDB:
         self.exec("UPDATE users SET blocked=1 WHERE id=?", uid)
 
     # ---- выводы ----
-    def create_withdrawal(self, uid: int, amount: float, details: str, *, currency: str) -> int | None:
+    def create_withdrawal(self, uid: int, amount: float, details: str, *, currency: str,
+                          method: str | None = None, payout: dict | None = None) -> int | None:
         if not math.isfinite(amount) or amount <= 0:
             return None
         with self.tx():
             if not self.try_spend(uid, amount):
                 return None
             cur = self.exec(
-                "INSERT INTO withdrawals(user_id,amount,details,created_at,currency_at_request) VALUES(?,?,?,?,?)",
+                "INSERT INTO withdrawals(user_id,amount,details,created_at,currency_at_request,method) "
+                "VALUES(?,?,?,?,?,?)",
                 uid,
                 amount,
                 details,
                 now(),
                 currency,
+                method,
             )
-            return int(cur.lastrowid)
+            wid = int(cur.lastrowid)
+            if payout:
+                payload = dict(payout)
+                bot_id = int(payload.pop("bot_id", 0) or 0)
+                if not payload.get("idempotency_key"):
+                    if bot_id <= 0:
+                        raise ValueError("payout job requires bot_id")
+                    payload["idempotency_key"] = payout_idempotency_key(bot_id, wid)
+                self._insert_payout_job(wid, payload)
+            return wid
+
+    def _insert_payout_job(self, wid: int, payout: dict) -> None:
+        ts = now()
+        self.exec(
+            "INSERT INTO payout_jobs(withdrawal_id,method,status,idempotency_key,destination,"
+            "amount_rub,amount_asset,error,result_json,attempts,next_attempt_at,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            wid,
+            payout["method"],
+            payout["status"],
+            payout["idempotency_key"],
+            payout["destination"],
+            payout.get("amount_rub"),
+            payout.get("amount_asset"),
+            payout.get("error"),
+            payout.get("result_json"),
+            int(payout.get("attempts") or 0),
+            int(payout.get("next_attempt_at") or 0),
+            ts,
+            ts,
+        )
+
+    def payout_job(self, wid: int) -> sqlite3.Row | None:
+        return self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=?", wid)
+
+    def payout_job_by_key(self, key: str) -> sqlite3.Row | None:
+        return self.one("SELECT * FROM payout_jobs WHERE idempotency_key=?", key)
+
+    def payout_jobs_by_status(self, *statuses: str, now_ts: int | None = None) -> list[sqlite3.Row]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" * len(statuses))
+        if now_ts is None:
+            return self.all(f"SELECT * FROM payout_jobs WHERE status IN ({placeholders}) ORDER BY withdrawal_id",
+                            *statuses)
+        return self.all(
+            f"SELECT * FROM payout_jobs WHERE status IN ({placeholders}) AND next_attempt_at<=? "
+            "ORDER BY withdrawal_id",
+            *statuses,
+            now_ts,
+        )
+
+    def queue_payout_job(self, wid: int) -> sqlite3.Row | None:
+        """Move an awaiting-approval job to queued. Does not change the reserved withdrawal."""
+        with self.tx():
+            job = self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=?", wid)
+            w = self.one("SELECT * FROM withdrawals WHERE id=? AND status='pending'", wid)
+            if not job or not w or job["status"] not in ("awaiting_approval", "queued"):
+                return None
+            if job["status"] == "queued":
+                return job
+            ts = now()
+            cur = self.exec(
+                "UPDATE payout_jobs SET status='queued',error=NULL,updated_at=?,next_attempt_at=0 "
+                "WHERE withdrawal_id=? AND status='awaiting_approval'",
+                ts, wid,
+            )
+            if cur.rowcount != 1:
+                return None
+            return self.payout_job(wid)
+
+    def cancel_payout_and_reject(self, wid: int) -> sqlite3.Row | None:
+        """Reject a pending withdrawal and cancel a job that has not been submitted yet."""
+        with self.tx():
+            w = self.one("SELECT * FROM withdrawals WHERE id=? AND status='pending'", wid)
+            if not w:
+                return None
+            job = self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=?", wid)
+            if job and job["status"] == "submitted":
+                return None
+            changed = self.exec(
+                "UPDATE withdrawals SET status='rejected',resolved_at=? WHERE id=? AND status='pending'",
+                now(), wid,
+            )
+            if changed.rowcount != 1:
+                return None
+            if job and job["status"] in ("awaiting_approval", "queued"):
+                self.exec(
+                    "UPDATE payout_jobs SET status='cancelled',updated_at=? "
+                    "WHERE withdrawal_id=? AND status IN ('awaiting_approval','queued')",
+                    now(), wid,
+                )
+            self.add_balance(w["user_id"], w["amount"])
+            return w
+
+    def mark_payout_submitted(self, wid: int, provider_id: str, debit: str | None = None,
+                              result: dict | None = None) -> sqlite3.Row | None:
+        with self.tx():
+            job = self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=? AND status='queued'", wid)
+            w = self.one("SELECT * FROM withdrawals WHERE id=? AND status='pending'", wid)
+            if not job or not w:
+                return None
+            ts = now()
+            import json
+            payload = json.dumps(result, ensure_ascii=False, separators=(",", ":")) if result else None
+            cur = self.exec(
+                "UPDATE payout_jobs SET status='submitted',provider_id=?,debit=?,result_json=?,"
+                "error=NULL,submitted_at=?,updated_at=?,attempts=attempts+1 "
+                "WHERE withdrawal_id=? AND status='queued'",
+                provider_id, debit, payload, ts, ts, wid,
+            )
+            return self.payout_job(wid) if cur.rowcount == 1 else None
+
+    def defer_payout_job(self, wid: int, *, error: str, delay: int, expected: str = "queued") -> bool:
+        with self.tx():
+            ts = now()
+            cur = self.exec(
+                "UPDATE payout_jobs SET error=?,next_attempt_at=?,updated_at=?,attempts=attempts+1 "
+                "WHERE withdrawal_id=? AND status=?",
+                error[:500], ts + max(0, delay), ts, wid, expected,
+            )
+            return cur.rowcount == 1
+
+    def apply_payout_outcome(self, wid: int, *, ok: bool, provider_id: str | None = None,
+                             debit: str | None = None, error: str | None = None,
+                             result: dict | None = None) -> str | None:
+        """Complete or fail a reserved payout exactly once. Returns 'completed', 'failed', or None."""
+        import json
+        with self.tx():
+            w = self.one("SELECT * FROM withdrawals WHERE id=?", wid)
+            job = self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=?", wid)
+            if not w or not job:
+                return None
+            if job["status"] == "completed":
+                return "completed" if ok else None
+            if job["status"] == "failed":
+                return "failed" if not ok else None
+            if job["status"] not in ("queued", "submitted"):
+                return None
+            if w["status"] != "pending":
+                return None
+            ts = now()
+            payload = json.dumps(result, ensure_ascii=False, separators=(",", ":")) if result else job["result_json"]
+            if ok:
+                cur = self.exec(
+                    "UPDATE withdrawals SET status='paid',resolved_at=? WHERE id=? AND status='pending'",
+                    ts, wid,
+                )
+                if cur.rowcount != 1:
+                    return None
+                self.exec(
+                    "UPDATE payout_jobs SET status='completed',provider_id=COALESCE(?,provider_id),"
+                    "debit=COALESCE(?,debit),result_json=?,error=NULL,completed_at=?,updated_at=? "
+                    "WHERE withdrawal_id=? AND status IN ('queued','submitted')",
+                    provider_id, debit, payload, ts, ts, wid,
+                )
+                return "completed"
+            cur = self.exec(
+                "UPDATE withdrawals SET status='failed',resolved_at=? WHERE id=? AND status='pending'",
+                ts, wid,
+            )
+            if cur.rowcount != 1:
+                return None
+            self.exec(
+                "UPDATE payout_jobs SET status='failed',provider_id=COALESCE(?,provider_id),"
+                "debit=COALESCE(?,debit),result_json=?,error=?,completed_at=?,updated_at=? "
+                "WHERE withdrawal_id=? AND status IN ('queued','submitted')",
+                provider_id, debit, payload, (error or "failed")[:500], ts, ts, wid,
+            )
+            self.add_balance(w["user_id"], w["amount"])
+            return "failed"
+
+    def paid_or_inflight_rub_since(self, since: int) -> int:
+        """Integer rubles already reserved, sent or paid today (for a daily cap)."""
+        row = self.one(
+            "SELECT COALESCE(SUM(j.amount_rub),0) FROM payout_jobs j "
+            "WHERE j.status IN ('queued','submitted','completed') "
+            "AND j.amount_rub IS NOT NULL AND j.created_at>=?",
+            since,
+        )
+        return int(row[0] or 0) if row else 0
 
     def resolve_withdrawal(self, wid: int, approve: bool) -> sqlite3.Row | None:
         with self.tx():
             w = self.one("SELECT * FROM withdrawals WHERE id=? AND status='pending'", wid)
             if not w:
+                return None
+            job = self.one("SELECT * FROM payout_jobs WHERE withdrawal_id=?", wid)
+            if job and job["status"] in ("awaiting_approval", "queued", "submitted"):
                 return None
             changed = self.exec(
                 "UPDATE withdrawals SET status=?,resolved_at=? WHERE id=? AND status='pending'",
@@ -276,7 +490,7 @@ class ChildDB:
         elif scope == "pending":
             where, args, direction = "status='pending'", (), "ASC"
         elif scope == "completed":
-            where, args, direction = "status IN ('paid','rejected')", (), "DESC"
+            where, args, direction = "status IN ('paid','rejected','failed')", (), "DESC"
         else:
             raise ValueError("Invalid scope")
         with self.lock:

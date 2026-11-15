@@ -16,6 +16,10 @@ LAVEPAY_WEBHOOK_SECRET=
 WITHDRAW_APPROVER_ID=
 # Comma list of: card,sbp,usdt_trc20 (empty = all)
 WITHDRAW_METHODS=
+# Child LavePay payouts default OFF. Do not enable until the merchant is funded and rules are agreed.
+CHILD_LAVEPAY_PAYOUTS=
+CHILD_LAVEPAY_PAYOUTS_AUTO=
+CHILD_LAVEPAY_DAILY_LIMIT_RUB=
 # WITHDRAW_MIN (kopecks, default 10000) and WITHDRAW_FEE_PERCENT (default 5) are also editable in admin prices
 
 # Unsubscribe webhooks (TGrass / PiarFlow). Secrets are stored in the private DB, not here.

@@ -86,6 +86,8 @@ class Supervisor:
             "username": b["username"],
             "vip": bool(b["vip"]),
             "creator_username": self.creator_username,
+            "lavepay_payouts_enabled": bool(self.cfg.child_lavepay_payouts),
+            "lavepay_payouts_auto": bool(self.cfg.child_lavepay_payouts_auto),
         })
         return d
 

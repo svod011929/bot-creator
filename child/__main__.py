@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from child.core import ChildApp, GateMiddleware, build_admin_router, build_core_router
 from child.engagement import ObservationScope
+from child.payout_flow import build_payout_router
 from child.withdrawals import build_history_router
 
 EXIT_BAD_TOKEN = 3
@@ -29,6 +30,7 @@ def build_dispatcher(app: ChildApp) -> Dispatcher:
     dp.message.outer_middleware(gate)
     dp.callback_query.outer_middleware(gate)
     dp.include_router(build_core_router(app))
+    dp.include_router(build_payout_router(app))
     dp.include_router(build_history_router(app))
     dp.include_router(build_admin_router(app))
     if hasattr(app.template, "build_admin_router"):
