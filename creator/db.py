@@ -239,6 +239,7 @@ class DB:
         self._ensure_unsubscribe_schema()
         self._ensure_owner_lavepay_schema()
         self._ensure_admin_actions()
+        self._ensure_bot_broadcasts()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -548,6 +549,56 @@ class DB:
 
     def admin_actions_count(self) -> int:
         return self.scalar("SELECT COUNT(*) FROM admin_actions") or 0
+
+    def _ensure_bot_broadcasts(self) -> None:
+        """Additive job and recipient receipts for the all-child-bots broadcast."""
+        with self._lock:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS admin_bot_broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    delivered INTEGER NOT NULL DEFAULT 0,
+                    failed INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    finished_at INTEGER
+                )"""
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS admin_bot_broadcast_sent (
+                    job_id INTEGER NOT NULL,
+                    bot_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (job_id, bot_id, user_id)
+                )"""
+            )
+
+    def start_bot_broadcast(self, admin_id: int, total: int) -> int:
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO admin_bot_broadcasts(admin_id,status,total,created_at) VALUES(?,?,?,?)",
+                (admin_id, "running", int(total), now()),
+            )
+            return int(cur.lastrowid)
+
+    def claim_bot_broadcast_recipient(self, job_id: int, bot_id: int, user_id: int) -> bool:
+        """Return True if this recipient was claimed for the job (not already sent)."""
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO admin_bot_broadcast_sent(job_id,bot_id,user_id) VALUES(?,?,?)",
+                (job_id, bot_id, user_id),
+            )
+            return cur.rowcount == 1
+
+    def finish_bot_broadcast(self, job_id: int, delivered: int, failed: int,
+                             status: str = "done") -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE admin_bot_broadcasts SET status=?,delivered=?,failed=?,finished_at=? WHERE id=?",
+                (status, int(delivered), int(failed), now(), job_id),
+            )
+
 
     def change_balance(self, uid: int, amount: int, kind: str, comment: str = "", *, allow_negative: bool = False) -> int:
         with self.tx() as c:

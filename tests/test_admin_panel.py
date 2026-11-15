@@ -77,7 +77,8 @@ async def test_non_admin_and_removed_admin_get_nothing(env):  # noqa: F811
     for upd in (msg_update(OWNER, ADMIN_BTN), msg_update(OWNER, "/admin"), cb_update(OWNER, "a:main"),
                 cb_update(OWNER, "a:bots:0"), cb_update(OWNER, "a:bot:1"), cb_update(OWNER, f"a:user:{OWNER}"),
                 cb_update(OWNER, "a:botfind"), cb_update(OWNER, "a:ulist:0:all"), cb_update(OWNER, "a:alog:0"),
-                cb_update(OWNER, "a:lave:0"), cb_update(OWNER, "a:bots:0:deleted")):
+                cb_update(OWNER, "a:lave:0"), cb_update(OWNER, "a:bots:0:deleted"),
+                cb_update(OWNER, "a:bcb"), cb_update(OWNER, "a:bcbgo")):
         await feed(upd)
     assert not any("Админ" in (t or "") or "Бот ID" in (t or "") for t in session.texts())
     await feed(msg_update(ADMIN, "/admin"))
@@ -232,3 +233,97 @@ async def test_user_history_and_balance_refresh(env):  # noqa: F811
     await feed(cb_update(ADMIN, f"a:uhist:{OWNER}:0"))
     assert "История операций" in session.texts()[-1]
     assert "seed" in session.texts()[-1]
+
+
+
+def _child_users(ctx, bot_id, users):
+    from child.db import ChildDB
+    path = ctx.sup.bot_dir(bot_id)
+    path.mkdir(parents=True, exist_ok=True)
+    db = ChildDB(path / "bot.db")
+    for uid, flags in users:
+        db.upsert_user(uid, f"u{uid}", f"U{uid}", None)
+        if flags.get("blocked"):
+            db.exec("UPDATE users SET blocked=1 WHERE id=?", uid)
+        if flags.get("banned"):
+            db.set_banned(uid, True)
+    db.conn.close()
+
+
+async def test_child_bots_broadcast_preview_confirm_and_access(env, monkeypatch):  # noqa: F811
+    from aiogram.exceptions import TelegramRetryAfter
+    from aiogram.methods import CopyMessage, SendMessage
+
+    from creator import bot_broadcast as bcb
+    ctx, feed, session = env
+    monkeypatch.setattr(bcb, "SEND_PAUSE", 0)
+    ids = seed_bots(ctx, 3)
+    for i, bid in enumerate(ids):
+        ctx.db.conn.execute(
+            "UPDATE bots SET token=? WHERE id=?",
+            (f"10000{i}:TEST-CHILD-TOKEN-PLACEHOLDER-{i}", bid),
+        )
+    # ids[0] active users 10, 11; 11 blocked
+    _child_users(ctx, ids[0], [(10, {}), (11, {"blocked": True})])
+    # ids[1] user 10 again (other bot) and 12 banned, 13 active
+    _child_users(ctx, ids[1], [(10, {}), (12, {"banned": True}), (13, {})])
+    # ids[2] deleted — listed then deleted, should be skipped
+    _child_users(ctx, ids[2], [(14, {})])
+    ctx.db.delete_bot(ids[2])
+
+    # non-admin cannot start or confirm
+    await feed(msg_update(OWNER, "/start"))
+    session.clear()
+    await feed(cb_update(OWNER, "a:bcb"))
+    await feed(msg_update(OWNER, "секретный текст"))
+    await feed(cb_update(OWNER, "a:bcbgo"))
+    assert not any("Предпросмотр рассылки по дочерним" in (x or "") for x in session.texts())
+    assert not any(m.text == "секретный текст" for m in session.of(SendMessage))
+
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:bcb"))
+    assert "дочерних ботов" in session.texts()[-1]
+    # message without confirm must not send
+    session.clear()
+    await feed(msg_update(ADMIN, "Новости клуба"))
+    preview = session.texts()[-1]
+    assert "Предпросмотр рассылки по дочерним ботам" in preview
+    assert "Всего получателей: 3" in preview  # 10 and (not 11) from bot0; 10 and 13 (not 12) from bot1
+    assert "Ботов с получателями: 2" in preview
+    assert ("✅ Отправить 3", "a:bcbgo") in inline(session.of(SendMessage)[-1])
+    assert not any(m.chat_id in (10, 13) and m.text == "Новости клуба" for m in session.of(SendMessage))
+
+    # flaky first send to user 10 of the first bot is retried, not skipped
+    orig = session.make_request
+    retried = {"n": 0}
+
+    async def flaky(bot, method, timeout=None):
+        if isinstance(method, SendMessage) and method.chat_id == 10 and method.text == "Новости клуба" and retried["n"] == 0:
+            retried["n"] += 1
+            raise TelegramRetryAfter(method=method, message="retry", retry_after=0)
+        return await orig(bot, method, timeout)
+
+    session.make_request = flaky  # type: ignore[method-assign]
+    await feed(cb_update(ADMIN, "a:bcbgo"))
+    await bcb.drain()
+    delivered = [m for m in session.of(SendMessage) if m.text == "Новости клуба"]
+    chats = sorted(m.chat_id for m in delivered)
+    assert chats == [10, 10, 13]
+    assert not session.of(CopyMessage)
+    assert retried["n"] == 1
+    # no second wave on a repeat confirm
+    session.clear()
+    await feed(cb_update(ADMIN, "a:bcbgo"))
+    await bcb.drain()
+    assert not any(m.text == "Новости клуба" for m in session.of(SendMessage))
+    # audit log has counts, not tokens
+    rows = ctx.db.admin_actions()
+    actions = [r["action"] for r in rows]
+    assert "broadcast_bots" in actions and "broadcast_bots_done" in actions
+    for r in rows:
+        if r["action"].startswith("broadcast_bots"):
+            assert "token" not in (r["detail"] or "").lower()
+            assert ":" not in (r["detail"] or "") or "recipients=" in r["detail"]
+            assert "t0" not in (r["detail"] or "") and "TEST" not in (r["detail"] or "")
+    done = next(r for r in rows if r["action"] == "broadcast_bots_done")
+    assert "delivered=3" in done["detail"]
