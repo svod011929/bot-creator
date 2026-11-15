@@ -74,17 +74,15 @@ def template_allows(app) -> bool:
 
 
 def payouts_active(app) -> bool:
-    """True only when platform + bot flags are on and the template is in scope."""
+    """True when the constructor wrote the opt-in flag (connected shop + global flag + unit)."""
     if not template_allows(app):
         return False
-    return payouts_platform_enabled(read_config(app.dir)) and payouts_bot_enabled(app.s)
+    return payouts_platform_enabled(read_config(app.dir))
 
 
 def payouts_auto(app) -> bool:
-    """Auto-queue only when both platform and bot auto flags are on (and payouts are active)."""
-    if not payouts_active(app):
-        return False
-    return payouts_auto_platform_enabled(read_config(app.dir)) and payouts_auto_bot_enabled(app.s)
+    """Owner approval is always required for LavePay child payouts."""
+    return False
 
 
 def normalize_unit_name(value: str) -> str:
@@ -107,8 +105,15 @@ def payout_unit(settings: dict[str, Any] | None, currency: str) -> str | None:
 
 
 def payouts_ready(app) -> bool:
-    """Flags on, and the bot currency (or explicit unit setting) can be paid out."""
-    return payouts_active(app) and payout_unit(app.s, app.currency) is not None
+    """LavePay path is offered only when the constructor has marked this bot ready."""
+    if not payouts_active(app):
+        return False
+    cfg = read_config(app.dir)
+    kind = cfg.get("lavepay_unit_kind")
+    rate = cfg.get("lavepay_unit_rate")
+    if kind in {"rub", "usdt"} and rate:
+        return True
+    return payout_unit(app.s, app.currency) == "rub"
 
 
 def methods_for_amount(unit: str, amount: float) -> list[str]:

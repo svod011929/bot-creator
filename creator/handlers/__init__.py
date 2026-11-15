@@ -13,6 +13,7 @@ from creator.handlers import (
     info,
     lavepay,
     mybots,
+    owner_payouts,
     piarflow,
     presentation,
     resale,
@@ -25,10 +26,28 @@ from creator.handlers import (
 
 def build_routers() -> list[Router]:
     # common первым: /start, отмена и сброс состояния по кнопкам меню
-    routers = [common.router, content.router, presentation.router, lavepay.router, sponsor_sources.router, admin.router,
-               tgrass.router, piarflow.router, create.router,
-               subscription.router, bot_setup.router, bot_stats.router, engagement.router, bot_list.router, mybots.router,
-               withdrawals.router, cabinet.router, resale.router, info.router]
+    routers = [
+        common.router,
+        content.router,
+        presentation.router,
+        lavepay.router,
+        sponsor_sources.router,
+        admin.router,
+        tgrass.router,
+        piarflow.router,
+        create.router,
+        subscription.router,
+        bot_setup.router,
+        bot_stats.router,
+        engagement.router,
+        bot_list.router,
+        mybots.router,
+        owner_payouts.router,
+        withdrawals.router,
+        cabinet.router,
+        resale.router,
+        info.router,
+    ]
     for r in routers:  # позволяет собирать диспетчер повторно (тесты, --dry-run)
         r._parent_router = None
     return routers

@@ -1,10 +1,8 @@
-"""Platform-side LavePay payout worker for clicker and refbot child withdrawals.
+"""Constructor-side worker for owner-shop USDT TRC-20 payouts.
 
-Runs only in the constructor process, which holds the merchant key. Child
-processes never see the key. The worker does nothing unless the global
-CHILD_LAVEPAY_PAYOUTS flag is on; even then each bot must also have its own
-flag on, and both default to off. POST endpoints that move money are called
-only for queued jobs that already reserved the user's in-bot balance.
+Sends money only from the bot owner's LavePay shop, and only after the owner
+confirms a live quote. The platform merchant is not charged. Children never
+receive API keys. Insufficient merchant funds leave the request pending.
 """
 from __future__ import annotations
 
@@ -12,24 +10,27 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from child import templates
 from child.db import ChildDB, fmt
-from child.files import read_settings
 from child.payouts import (
+    JOB_AWAITING,
     JOB_QUEUED,
     JOB_SUBMITTED,
     PAYOUT_TEMPLATES,
     loads_destination,
-    match_sbp_bank,
     parse_idempotency_key,
-    payouts_auto_bot_enabled,
-    payouts_bot_enabled,
 )
 from creator.lavepay import LavePayError
+from creator.owner_payouts import (
+    child_flags,
+    convert_amount,
+    owner_client,
+    quote_for_job,
+    shop_plain_key,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from creator.services import Ctx
@@ -43,10 +44,6 @@ RETRYABLE = frozenset({
 })
 IMMEDIATE_FAIL = frozenset({"validation_error", "not_found", "idempotency_conflict"})
 PAYOUT_EVENTS = {
-    "card_payout.completed": True,
-    "card_payout.failed": False,
-    "sbp_payout.completed": True,
-    "sbp_payout.failed": False,
     "withdrawal.completed": True,
     "withdrawal.failed": False,
 }
@@ -58,26 +55,10 @@ def _delay(attempts: int) -> int:
     return BACKOFF[min(max(attempts, 0), len(BACKOFF) - 1)]
 
 
-def _day_start(now_ts: int) -> int:
-    local = datetime.fromtimestamp(now_ts, tz=timezone.utc).astimezone()
-    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return int(start.timestamp())
-
-
 def _safe_result(payload: dict) -> dict[str, Any]:
-    """Persist provider fields that are not payment credentials."""
-    keep = ("id", "status", "amount_rub", "debit", "currency", "rate", "amount",
-            "fee", "asset", "network", "tx_hash", "tx_url", "error", "replayed",
-            "idempotency_key")
+    keep = ("id", "status", "amount", "fee", "debit", "currency", "asset", "network",
+            "tx_hash", "tx_url", "error", "replayed", "idempotency_key")
     out = {k: payload.get(k) for k in keep if payload.get(k) is not None}
-    card = payload.get("card")
-    if isinstance(card, dict):
-        out["card_last4"] = card.get("last4")
-        out["card_masked"] = card.get("masked")
-    rec = payload.get("recipient")
-    if isinstance(rec, dict):
-        out["recipient_last4"] = rec.get("last4")
-        out["bank_name"] = rec.get("bank_name")
     addr = payload.get("address")
     if isinstance(addr, str) and len(addr) > 10:
         out["address"] = f"{addr[:4]}…{addr[-4:]}"
@@ -85,17 +66,15 @@ def _safe_result(payload: dict) -> dict[str, Any]:
 
 
 class ChildPayoutService:
-    def __init__(self, ctx: Ctx, client, notify: Notify | None = None):
+    def __init__(self, ctx: Ctx, client=None, notify: Notify | None = None):
         self.ctx = ctx
-        self.client = client
+        self.client = client  # platform client, unused for owner payouts
         self.notify = notify
         self._lock = asyncio.Lock()
-        self._banks: list[dict[str, Any]] = []
-        self._banks_at = 0.0
         self._open: dict[int, ChildDB] = {}
 
     def enabled(self) -> bool:
-        return bool(getattr(self.ctx.cfg, "child_lavepay_payouts", False)) and self.client is not None
+        return bool(getattr(self.ctx.cfg, "child_lavepay_payouts", False))
 
     def bot_dir(self, bot_id: int) -> Path:
         return self.ctx.cfg.bots_dir / str(bot_id)
@@ -104,8 +83,7 @@ class ChildPayoutService:
         db = self._open.get(bot_id)
         if db is not None:
             return db
-        path = self.bot_dir(bot_id) / "bot.db"
-        db = ChildDB(path)
+        db = ChildDB(self.bot_dir(bot_id) / "bot.db")
         self._open[bot_id] = db
         return db
 
@@ -120,24 +98,6 @@ class ChildPayoutService:
     def _bot_row(self, bot_id: int):
         return self.ctx.db.bot(bot_id)
 
-    def _bot_flags(self, bot_id: int) -> tuple[bool, bool, dict[str, Any]]:
-        row = self._bot_row(bot_id)
-        if not row or row["template"] not in PAYOUT_TEMPLATES:
-            return False, False, {}
-        defaults = templates.info(row["template"]).defaults()
-        settings = read_settings(self.bot_dir(bot_id), defaults)
-        return payouts_bot_enabled(settings), payouts_auto_bot_enabled(settings), settings
-
-    async def _banks_list(self) -> list[dict[str, Any]]:
-        if self._banks and time.monotonic() - self._banks_at < 3600:
-            return self._banks
-        data = await self.client.sbp_banks()
-        items = data.get("items") if isinstance(data, dict) else None
-        if isinstance(items, list):
-            self._banks = [i for i in items if isinstance(i, dict)]
-            self._banks_at = time.monotonic()
-        return self._banks
-
     async def _send(self, uid: int, text: str) -> None:
         if self.notify and uid:
             try:
@@ -146,15 +106,14 @@ class ChildPayoutService:
                 log.info("notify %s failed", uid)
 
     def record_event(self, etype: str, data: dict) -> dict[str, Any] | None:
-        """Apply a signed payout webhook to the child job, before returning 200."""
+        """Owner shops do not share the platform webhook secret; polling is the source of truth."""
         if etype not in PAYOUT_EVENTS or not isinstance(data, dict):
             return None
-        key = str(data.get("idempotency_key") or "")
-        parsed = parse_idempotency_key(key)
+        parsed = parse_idempotency_key(str(data.get("idempotency_key") or ""))
         if not parsed:
             return None
         bot_id, wid = parsed
-        if not self._bot_flags(bot_id)[0] and not self._job_exists(bot_id, wid):
+        if self.ctx.db.owner_lavepay_shop(bot_id) is None:
             return None
         ok = PAYOUT_EVENTS[etype]
         status = str(data.get("status") or ("completed" if ok else "failed"))
@@ -164,12 +123,6 @@ class ChildPayoutService:
         if not applied:
             return None
         return {"bot_id": bot_id, "withdrawal_id": wid, "ok": applied == "completed"}
-
-    def _job_exists(self, bot_id: int, wid: int) -> bool:
-        try:
-            return self._db(bot_id).payout_job(wid) is not None
-        except Exception:  # noqa: BLE001
-            return False
 
     def _apply(self, bot_id: int, wid: int, *, ok: bool, payload: dict) -> str | None:
         db = self._db(bot_id)
@@ -213,11 +166,15 @@ class ChildPayoutService:
                 await self._send(row["owner_id"], f"✅ LavePay выплатил заявку №{wid} бота #{bot_id}: {amount}.{extra}")
         else:
             reason = (job["error"] if job and job["error"] else "выплата не прошла")
-            await self._send(w["user_id"],
-                             f"❌ Выплата по заявке №{wid} ({amount}) не прошла ({reason}). Средства возвращены на баланс.")
+            await self._send(
+                w["user_id"],
+                f"❌ Выплата по заявке №{wid} ({amount}) не прошла ({reason}). Средства возвращены на баланс.",
+            )
             if row:
-                await self._send(row["owner_id"],
-                                 f"❌ LavePay не выплатил заявку №{wid} бота #{bot_id}: {reason}. Баланс пользователя возвращён.")
+                await self._send(
+                    row["owner_id"],
+                    f"❌ LavePay не выплатил заявку №{wid} бота #{bot_id}: {reason}. Баланс пользователя возвращён.",
+                )
 
     async def poll_once(self) -> None:
         if not self.enabled():
@@ -228,8 +185,7 @@ class ChildPayoutService:
                     continue
                 if not (self.bot_dir(bot["id"]) / "bot.db").exists():
                     continue
-                bot_on, _, _ = self._bot_flags(bot["id"])
-                if not bot_on:
+                if shop_plain_key(self.ctx.cfg, self.ctx.db, bot["id"]) is None:
                     continue
                 try:
                     await self._process_bot(bot["id"])
@@ -258,16 +214,16 @@ class ChildPayoutService:
             except Exception:  # noqa: BLE001
                 log.exception("submit failed bot=%s wid=%s", bot_id, job["withdrawal_id"])
 
+    async def _owner_client(self, bot_id: int):
+        return await owner_client(self.ctx.cfg, self.ctx.db, bot_id)
+
     async def _reconcile(self, bot_id: int, job) -> None:
-        ident = job["provider_id"] or job["idempotency_key"]
-        if job["method"] == "card":
-            payload = await self.client.get_card_payout(ident)
-        elif job["method"] == "sbp":
-            payload = await self.client.get_sbp_payout(ident)
-        elif job["method"] == "usdt_trc20":
-            payload = await self.client.get_chain_withdrawal(ident)
-        else:
-            return
+        client = await self._owner_client(bot_id)
+        try:
+            ident = job["provider_id"] or job["idempotency_key"]
+            payload = await client.get_chain_withdrawal(ident)
+        finally:
+            await client.close()
         status = str(payload.get("status") or "")
         if status == "completed":
             applied = self._apply(bot_id, job["withdrawal_id"], ok=True, payload=payload)
@@ -278,30 +234,100 @@ class ChildPayoutService:
             if applied == "failed":
                 await self._notify_outcome(bot_id, job["withdrawal_id"], False)
 
-    async def _submit(self, bot_id: int, job) -> None:
+    def job_amounts(self, bot_id: int, wid: int) -> tuple[str | None, Decimal | None]:
+        flags = child_flags(self.ctx.cfg, self.ctx.db, bot_id)
+        w = self._db(bot_id).withdrawal(wid)
+        if not w or not flags.get("lavepay_unit_kind") or not flags.get("lavepay_unit_rate"):
+            raise ValueError("unit")
+        return convert_amount(float(w["amount"]), flags["lavepay_unit_kind"], flags["lavepay_unit_rate"])
+
+    async def quote_withdrawal(self, bot_id: int, wid: int) -> dict[str, Any]:
+        db = self._db(bot_id)
+        w = db.withdrawal(wid)
+        job = db.payout_job(wid)
+        if not w or w["status"] != "pending" or not job or job["status"] not in (JOB_AWAITING, JOB_QUEUED):
+            raise ValueError("unavailable")
+        amount_usdt, amount_rub = self.job_amounts(bot_id, wid)
+        client = await self._owner_client(bot_id)
+        try:
+            quote = await quote_for_job(client, amount_usdt=amount_usdt, amount_rub=amount_rub)
+        finally:
+            await client.close()
+        return quote
+
+    async def confirm_and_queue(self, bot_id: int, wid: int, quote: dict[str, Any]) -> str:
+        """Freeze the shown quote, queue the job, and try to send. Returns a status word."""
+        db = self._db(bot_id)
+        if db.queue_payout_job(wid) is None:
+            job = db.payout_job(wid)
+            if not job or job["status"] not in (JOB_QUEUED, JOB_SUBMITTED, "completed"):
+                raise ValueError("unavailable")
+        db.exec(
+            "UPDATE payout_jobs SET amount_asset=?, debit=?, result_json=?, updated_at=? WHERE withdrawal_id=?",
+            quote["amount"], quote.get("debit"),
+            json.dumps({"quoted": quote}, ensure_ascii=False, separators=(",", ":")),
+            int(time.time()), wid,
+        )
+        job = db.payout_job(wid)
+        if job["status"] == JOB_QUEUED:
+            await self._submit(bot_id, job, max_debit=str(quote.get("debit") or ""))
+        job = db.payout_job(wid)
+        w = db.withdrawal(wid)
+        if job and job["status"] == "completed":
+            return "completed"
+        if job and job["status"] == "failed":
+            return "failed"
+        if job and job["status"] == JOB_SUBMITTED:
+            return "submitted"
+        if job and job["status"] == JOB_QUEUED:
+            return "queued"
+        if w and w["status"] == "pending":
+            return "pending"
+        return job["status"] if job else "missing"
+
+    async def _submit(self, bot_id: int, job, max_debit: str | None = None) -> None:
         db = self._db(bot_id)
         wid = job["withdrawal_id"]
         w = db.withdrawal(wid)
         if not w or w["status"] != "pending":
             return
         dest = loads_destination(job["destination"])
-        if job["amount_rub"]:
-            blocked = self.check_daily_limit(bot_id, int(job["amount_rub"]))
-            if blocked:
-                db.defer_payout_job(wid, error=blocked, delay=_delay(int(job["attempts"] or 0)))
+        address = str(dest.get("address") or "")
+        if not address:
+            applied = db.apply_payout_outcome(wid, ok=False, error="validation_error: нет адреса")
+            if applied == "failed":
+                await self._notify_outcome(bot_id, wid, False)
+            return
+        amount = str(job["amount_asset"] or dest.get("amount") or "")
+        if not amount:
+            try:
+                amount, _rub = self.job_amounts(bot_id, wid)
+                if not amount:
+                    raise ValueError("need quote")
+            except ValueError:
+                db.defer_payout_job(
+                    wid, error="Нужно подтверждение курса в конструкторе",
+                    delay=_delay(int(job["attempts"] or 0)),
+                )
                 return
+        client = await self._owner_client(bot_id)
         try:
-            payload = await self._send_payout(job, dest)
-        except LavePayError as exc:
-            await self._handle_error(bot_id, job, exc)
-            return
-        if not payload:
-            return
+            try:
+                if not max_debit:
+                    quote = await quote_for_job(client, amount_usdt=amount)
+                    max_debit = quote.get("debit")
+                payload = await client.create_chain_withdrawal(
+                    "USDT", "TRX", address, amount, job["idempotency_key"], max_debit=max_debit,
+                )
+            except LavePayError as exc:
+                await self._handle_error(bot_id, job, exc)
+                return
+        finally:
+            await client.close()
         status = str(payload.get("status") or "")
         provider_id = str(payload.get("id") or "")
         debit = str(payload["debit"]) if payload.get("debit") is not None else None
         if status == "failed":
-            # 200 + failed: money already returned to the merchant; refund the user once.
             applied = db.apply_payout_outcome(
                 wid, ok=False, provider_id=provider_id or None, debit=debit,
                 error=str(payload.get("error") or "failed"), result=_safe_result(payload),
@@ -320,82 +346,37 @@ class ChildPayoutService:
             if db.mark_payout_submitted(wid, provider_id, debit, _safe_result(payload)) is None:
                 log.warning("could not mark submitted bot=%s wid=%s", bot_id, wid)
 
-    async def _send_payout(self, job, dest: dict[str, Any]) -> dict | None:
-        method = job["method"]
-        key = job["idempotency_key"]
-        if method == "card":
-            amount = int(job["amount_rub"])
-            quote = await self.client.card_rate(amount)
-            if quote.get("available") is False:
-                raise LavePayError("payout_unavailable", str(quote.get("reason") or "unavailable"), 409)
-            price = quote.get("price") or {}
-            max_debit = str(price["debit"]) if price.get("debit") is not None else None
-            return await self.client.create_card_payout(
-                str(dest["card_number"]), amount, key, max_debit=max_debit,
-            )
-        if method == "sbp":
-            amount = int(job["amount_rub"])
-            banks = await self._banks_list()
-            bank_id = str(dest.get("bank_id") or "")
-            if not bank_id:
-                matched = match_sbp_bank(banks, str(dest.get("bank") or dest.get("bank_name") or ""))
-                if not matched:
-                    raise LavePayError("validation_error", "Банк СБП не распознан", 422)
-                bank_id = matched["bank_id"]
-            quote = await self.client.sbp_rate(amount)
-            if quote.get("available") is False:
-                raise LavePayError("payout_unavailable", str(quote.get("reason") or "unavailable"), 409)
-            price = quote.get("price") or {}
-            max_debit = str(price["debit"]) if price.get("debit") is not None else None
-            return await self.client.create_sbp_payout(
-                str(dest["phone"]), bank_id, str(dest["recipient_name"]), amount, key, max_debit=max_debit,
-            )
-        if method == "usdt_trc20":
-            amount = str(job["amount_asset"] or dest.get("amount") or "")
-            quote = await self.client.withdrawals_quote("USDT", "TRX", amount)
-            max_debit = str(quote["debit"]) if quote.get("debit") is not None else None
-            return await self.client.create_chain_withdrawal(
-                "USDT", "TRX", str(dest["address"]), amount, key, max_debit=max_debit,
-            )
-        raise LavePayError("validation_error", f"unknown method {method}", 422)
-
     async def _handle_error(self, bot_id: int, job, exc: LavePayError) -> None:
         db = self._db(bot_id)
         wid = job["withdrawal_id"]
+        # Insufficient funds and temporary provider issues: keep the user reservation, tell the owner.
+        if exc.code == "insufficient_funds" or exc.code in RETRYABLE - {"rate_changed"}:
+            # Roll back to awaiting_approval so the owner can retry after funding.
+            db.exec(
+                "UPDATE payout_jobs SET status='awaiting_approval',error=?,updated_at=?,next_attempt_at=0 "
+                "WHERE withdrawal_id=? AND status IN ('queued','awaiting_approval')",
+                f"{exc.code}: {exc.message}"[:500], int(time.time()), wid,
+            )
+            row = self._bot_row(bot_id)
+            if row:
+                if exc.code == "insufficient_funds":
+                    await self._send(
+                        row["owner_id"],
+                        f"⏳ На магазине LavePay не хватает USDT для заявки №{wid} бота #{bot_id}. "
+                        "Заявка остаётся в ожидании, баланс пользователя не возвращён. "
+                        "Пополните магазин и подтвердите выплату снова.",
+                    )
+                else:
+                    await self._send(
+                        row["owner_id"],
+                        f"⏳ Выплата заявки №{wid} бота #{bot_id} временно недоступна ({exc.message}). "
+                        "Заявка остаётся в ожидании.",
+                    )
+            return
         if exc.code in IMMEDIATE_FAIL:
             applied = db.apply_payout_outcome(wid, ok=False, error=f"{exc.code}: {exc.message}")
             if applied == "failed":
                 await self._notify_outcome(bot_id, wid, False)
             return
-        # Retryable (including insufficient funds and payouts temporarily disabled): keep reserved, try later.
         delay = _delay(int(job["attempts"] or 0))
         db.defer_payout_job(wid, error=f"{exc.code}: {exc.message}", delay=delay)
-        if exc.code == "insufficient_funds":
-            row = self._bot_row(bot_id)
-            if row:
-                await self._send(
-                    row["owner_id"],
-                    f"⏳ Заявка на вывод №{wid} бота #{bot_id} ждёт пополнения баланса LavePay. "
-                    "Сумма по-прежнему зарезервирована у пользователя.",
-                )
-
-    def check_daily_limit(self, bot_id: int, amount_rub: int | None) -> str | None:
-        cap = int(getattr(self.ctx.cfg, "child_lavepay_daily_limit_rub", 0) or 0)
-        settings = self._bot_flags(bot_id)[2]
-        try:
-            bot_cap = int(settings.get("lavepay_daily_limit") or 0)
-        except (TypeError, ValueError):
-            bot_cap = 0
-        limit = 0
-        if cap > 0 and bot_cap > 0:
-            limit = min(cap, bot_cap)
-        elif cap > 0:
-            limit = cap
-        elif bot_cap > 0:
-            limit = bot_cap
-        if not limit or not amount_rub:
-            return None
-        used = self._db(bot_id).paid_or_inflight_rub_since(_day_start(int(time.time())))
-        if used + int(amount_rub) > limit:
-            return f"Дневной лимит выплат ({limit} ₽) будет превышен"
-        return None

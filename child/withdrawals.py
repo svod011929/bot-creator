@@ -141,10 +141,12 @@ async def show_detail(cb: CallbackQuery, app: ChildApp, scope: str, page: int, w
         if job and job['status'] == 'submitted':
             pass
         elif job and job['status'] in ('awaiting_approval', 'queued'):
-            approve = []
-            if job['status'] == 'awaiting_approval':
-                approve = [button('✅ Выплатить через LavePay', f'wd:ok:{wid}:{page}')]
-            rows.append(approve + [button('❌ Отклонить', f'wd:no:{wid}:{page}')])
+            from child.payout_flow import constructor_link
+            row = [button('❌ Отклонить', f'wd:no:{wid}:{page}')]
+            link = constructor_link(app, wid)
+            if link:
+                rows.append([InlineKeyboardButton(text='✅ Подтвердить в конструкторе', url=link)])
+            rows.append(row)
         else:
             rows.append([button('✅ Отметить выплаченной', f'wd:ok:{wid}:{page}'), button('❌ Отклонить', f'wd:no:{wid}:{page}')])
     rows.append([button('К списку', f'wh:list:{scope}:{page}')])
@@ -204,6 +206,14 @@ def build_history_router(app: ChildApp) -> Router:
                 await cb.answer('Заявка уже обработана', show_alert=True)
             elif action_name == 'in_flight':
                 await cb.answer('Выплата уже отправлена в LavePay. Дождитесь результата.', show_alert=True)
+            elif action_name == 'confirm_in_creator':
+                from child.payout_flow import constructor_link
+                link = constructor_link(app, wid)
+                await cb.answer(
+                    'Подтвердите выплату в конструкторе, там будет курс USDT.'
+                    + ((' ' + link) if link else ''),
+                    show_alert=True,
+                )
             else:
                 await cb.answer()
                 if action_name == 'enqueued':

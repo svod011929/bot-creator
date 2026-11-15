@@ -70,6 +70,7 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
         + ([btn("📚 Контент бота", callback(b, "home"))] if b['template'] in {"refbot", "starbot", "clicker"} else []),
         [btn("⚙️ Настройки", f"b:{i}:set"),
          btn("🚫 Снять с продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
+        [btn("💳 LavePay выплаты", f"olp:{i}")] if b["template"] in {"clicker", "refbot"} else [],
         [btn("💸 Доп заработок", f"b:{i}:tg")] if tgrass else [],
         [btn("🔗 Вебхуки отписок", f"b:{i}:wh")] if webhooks else [],
         [btn("🔁 Передать бота", f"b:{i}:transfer")],
