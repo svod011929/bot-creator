@@ -44,3 +44,8 @@ class Withdraw(StatesGroup):
     amount = State()
     confirm = State()
     reason = State()  # approver: optional reject reason
+
+
+class OwnerPayout(StatesGroup):
+    api_key = State()
+    coin_rate = State()

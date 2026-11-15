@@ -68,6 +68,17 @@ async def start(message: Message, command: CommandObject, state: FSMContext, ctx
         ctx.db.upsert_user(u.id, u.username, u.full_name, None)
         await screen(message, state, ctx, bot_id)
         return
+    if command.args and command.args.startswith("lpayout_"):
+        from creator.handlers.owner_payouts import open_from_start
+        try:
+            bot_id_s, wid_s = command.args.removeprefix("lpayout_").split("_", 1)
+            bot_id, wid = int(bot_id_s), int(wid_s)
+        except ValueError:
+            await message.answer("Заявка не найдена")
+            return
+        ctx.db.upsert_user(u.id, u.username, u.full_name, None)
+        await open_from_start(message, ctx, bot_id, wid)
+        return
     ref = None
     if command.args and command.args.startswith("ref") and command.args[3:].isdigit():
         ref = int(command.args[3:])

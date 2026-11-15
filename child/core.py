@@ -382,6 +382,9 @@ def build_core_router(app: ChildApp) -> Router:
         if not math.isfinite(amount) or amount <= 0 or amount < min_w or amount > u["balance"]:
             await message.answer(f"Сумма должна быть от {fmt(min_w)} до {fmt(u['balance'])} {app.currency}.")
             return
+        from child.payout_flow import start_method_choice
+        if await start_method_choice(message, state, app, amount):
+            return
         await state.update_data(amount=amount)
         await state.set_state(Withdraw.details)
         await message.answer(str(app.s.get("withdraw_details_prompt", "Укажите реквизиты для выплаты:")))
