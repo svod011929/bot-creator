@@ -358,3 +358,19 @@ async def test_admin_log_filters_and_price_is_logged(env):  # noqa: F811
     await feed(cb_update(ADMIN, "a:alog:0:zzz"))
     assert "всего 2" in session.texts()[-1]
     await feed(cb_update(OWNER, "a:alog:0:all"))
+
+
+async def test_admin_panel_has_submenus_with_all_buttons(env):  # noqa: F811
+    ctx, feed, session = env
+    from creator.handlers.admin import _group_rows, panel_kb
+    top = [b.callback_data for r in panel_kb(ctx, ADMIN).inline_keyboard for b in r]
+    assert "a:users" not in top and "a:g:people" in top and "a:stats" in top
+    inner = {b.callback_data for rows in _group_rows(ctx, ADMIN).values() for r in rows for b in r}
+    for need in ("a:users", "a:bots", "a:botfind", "a:bc", "a:bcb", "a:prices", "a:lave:0", "a:alog:0", "src:home"):
+        assert need in inner
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:g:fin"))
+    assert "Финансы" in session.texts()[-1]
+    n = len(session.texts())
+    await feed(cb_update(OWNER, "a:g:fin"))
+    assert len(session.texts()) == n or "Финансы" not in session.texts()[-1]

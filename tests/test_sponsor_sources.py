@@ -155,6 +155,7 @@ async def test_admin_secret_confirmation_delete_and_readonly(env, code, provider
     await feed(msg_update(OWNER, '/start'))
     before = '\n'.join(ctx.db.conn.iterdump())
     await feed(msg_update(ADMIN, '/admin'))
+    await feed(cb_update(ADMIN, 'a:g:tools'))
     assert any('Источники ОП' in b.text for m in session.requests
                for row in getattr(getattr(m, 'reply_markup', None), 'inline_keyboard', []) or [] for b in row)
     await feed(cb_update(ADMIN, 'src:home'))
