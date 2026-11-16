@@ -338,5 +338,5 @@ async def test_hub_when_both_enabled(penv):
     assert kb_texts(last(session))[:2] == ["TGrass — заявка не записана", "PiarFlow — заявка не записана"]
     await feed(cb_update(OWNER, f"b:{bot_id}:tgr"))
     assert "TGrass" in last(session).text
-    await feed(cb_update(ADMIN, "a:main"))
+    await feed(cb_update(ADMIN, "a:g:integ"))
     assert {"💸 TGrass", "🚀 PiarFlow"} <= set(kb_texts(last(session)))
