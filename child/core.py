@@ -449,45 +449,49 @@ async def subscription_redirect(message: Message, app: ChildApp):
 
 
 def admin_kb(app: ChildApp) -> InlineKeyboardMarkup:
+    # Группы: обзор · люди · управление · инструменты конструктора
     rows = [
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats"),
-         InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:bc")],
+         InlineKeyboardButton(text="👤 Пользователи", callback_data="adm:users:0")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm:set"),
          InlineKeyboardButton(text="💸 Заявки", callback_data="adm:wd")],
-        [InlineKeyboardButton(text="👤 Пользователи", callback_data="adm:users:0")],
-        [InlineKeyboardButton(text="📜 Журнал", callback_data="adm:olog:0")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:bc"),
+         InlineKeyboardButton(text="📜 Журнал", callback_data="adm:olog:0")],
     ]
     link = subscription_link(app)
     if link:
         rows.extend(link.inline_keyboard)
     for text, data in getattr(app.template, "ADMIN_BUTTONS", []):
         rows.append([InlineKeyboardButton(text=text, callback_data=data)])
-    # Deep links into constructor for tools that live there
     creator = str(app.cfg.get("creator_username") or "")
     bot_id = app.cfg.get("bot_id")
     if creator and bot_id:
         tpl = app.info.key if hasattr(app.info, "key") else ""
-        extras = []
+        tool_row = []
         if tpl == "clicker":
-            extras.append(("🎯 События", f"https://t.me/{creator}?start=events_{bot_id}"))
+            tool_row.append(InlineKeyboardButton(text="🎯 События", url=f"https://t.me/{creator}?start=events_{bot_id}"))
         elif tpl == "refbot":
-            extras.append(("🤝 Команды", f"https://t.me/{creator}?start=teams_{bot_id}"))
+            tool_row.append(InlineKeyboardButton(text="🤝 Команды", url=f"https://t.me/{creator}?start=teams_{bot_id}"))
         elif tpl == "starbot":
-            extras.append(("📚 Треки", f"https://t.me/{creator}?start=tracks_{bot_id}"))
-        extras.append(("🎨 Оформление", f"https://t.me/{creator}?start=pres_{bot_id}"))
-        for label, url in extras:
-            rows.append([InlineKeyboardButton(text=label, url=url)])
+            tool_row.append(InlineKeyboardButton(text="📚 Треки", url=f"https://t.me/{creator}?start=tracks_{bot_id}"))
+        tool_row.append(InlineKeyboardButton(text="🎨 Оформление", url=f"https://t.me/{creator}?start=pres_{bot_id}"))
+        if tool_row:
+            rows.append(tool_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _user_card_text(app, u) -> str:
     created = time.strftime("%Y-%m-%d", time.localtime(u["created_at"])) if u["created_at"] else "—"
+    pending = app.db.scalar(
+        "SELECT COUNT(*) FROM withdrawals WHERE user_id=? AND status='pending'", u["id"]
+    ) or 0
     return (
         f"👤 <b>{html.escape(u['full_name'] or '')}</b> "
         f"{('@' + html.escape(u['username'])) if u['username'] else ''}\n"
         f"ID: <code>{u['id']}</code>\nБаланс: {fmt(u['balance'])}\n"
         f"Регистрация: {created}\n"
         f"blocked: {'да' if u['blocked'] else 'нет'}\n"
+        f"Заявок на вывод (ожидают): {pending}\n"
         f"Статус: {'🚫 забанен' if u['banned'] else '✅ активен'}"
     )
 
@@ -541,24 +545,40 @@ def build_admin_router(app: ChildApp) -> Router:
     async def users_list(cb: CallbackQuery) -> None:
         parts = cb.data.split(":")
         page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        flt = parts[3] if len(parts) > 3 and parts[3] in {"all", "banned", "blocked"} else "all"
         PAGE = 8
-        total = app.db.user_count()
+        where = ""
+        if flt == "banned":
+            where = "WHERE banned=1"
+        elif flt == "blocked":
+            where = "WHERE blocked=1"
+        total = app.db.scalar(f"SELECT COUNT(*) FROM users {where}") or 0
         pages = max(1, -(-total // PAGE))
         page = max(0, min(page, pages - 1))
-        rows = app.db.user_list(limit=PAGE, offset=page * PAGE)
-        lines = [f"👤 <b>Пользователи</b> · стр. {page + 1}/{pages} · всего {total}"]
+        rows = app.db.all(
+            f"SELECT id, username, full_name, balance, banned, blocked, created_at FROM users {where} "
+            "ORDER BY id DESC LIMIT ? OFFSET ?",
+            PAGE, page * PAGE,
+        )
+        label = {"all": "все", "banned": "забаненные", "blocked": "blocked"}[flt]
+        lines = [f"👤 <b>Пользователи</b> · {label} · стр. {page + 1}/{pages} · всего {total}"]
         kb_rows = []
         for r in rows:
-            mark = "🚫" if r["banned"] else "✅"
+            mark = "🚫" if r["banned"] else ("⛔" if r["blocked"] else "✅")
             name = (r["username"] and f"@{r['username']}") or (r["full_name"] or str(r["id"]))
             kb_rows.append([InlineKeyboardButton(text=f"{mark} {name[:22]}", callback_data=f"adm:u:{r['id']}")])
         nav = []
         if page > 0:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm:users:{page - 1}"))
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"adm:users:{page - 1}:{flt}"))
         if page < pages - 1:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"adm:users:{page + 1}"))
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"adm:users:{page + 1}:{flt}"))
         if nav:
             kb_rows.append(nav)
+        kb_rows.append([
+            InlineKeyboardButton(text="все", callback_data="adm:users:0:all"),
+            InlineKeyboardButton(text="бан", callback_data="adm:users:0:banned"),
+            InlineKeyboardButton(text="blocked", callback_data="adm:users:0:blocked"),
+        ])
         kb_rows.append([InlineKeyboardButton(text="🔎 Поиск", callback_data="adm:usearch")])
         kb_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")])
         await cb.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))

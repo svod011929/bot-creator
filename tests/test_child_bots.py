@@ -208,3 +208,14 @@ async def test_owner_admin_is_private_and_setting_is_logged(tmp_path, bot, sessi
     assert ("⬅️ В панель", "adm:main") in buttons
     rows = app.db.owner_actions()
     assert any(r["action"] == "setting" and r["target"] == "click_reward" for r in rows)
+
+
+async def test_owner_user_filters(tmp_path, bot, session):
+    app, feed = make(tmp_path, "clicker", bot)
+    await feed(msg_update(A, "/start"))
+    await feed(msg_update(B, "/start"))
+    app.db.set_banned(B, True)
+    await feed(cb_update(OWNER, "adm:users:0:banned"))
+    assert "забаненные" in session.texts()[-1] and "всего 1" in session.texts()[-1]
+    await feed(cb_update(OWNER, f"adm:u:{A}"))
+    assert "ожидают" in session.texts()[-1]

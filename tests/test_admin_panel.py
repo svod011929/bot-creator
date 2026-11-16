@@ -345,3 +345,16 @@ async def test_bot_lookup_by_owner_id(env):  # noqa: F811
     await feed(cb_update(ADMIN, "a:botfind"))
     await feed(msg_update(ADMIN, str(ids[1])))
     assert f"Бот ID {ids[1]}" in session.texts()[-1]
+
+
+async def test_admin_log_filters_and_price_is_logged(env):  # noqa: F811
+    ctx, feed, session = env
+    ctx.db.log_admin(ADMIN, "ban", target="1")
+    ctx.db.log_admin(ADMIN, "balance", target="2")
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:alog:0:ban"))
+    text = session.texts()[-1]
+    assert "бан" in text and "всего 1" in text
+    await feed(cb_update(ADMIN, "a:alog:0:zzz"))
+    assert "всего 2" in session.texts()[-1]
+    await feed(cb_update(OWNER, "a:alog:0:all"))
