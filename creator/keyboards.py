@@ -53,27 +53,38 @@ def cancel_kb(back: str = "cancel") -> InlineKeyboardMarkup:
 
 
 def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False) -> InlineKeyboardMarkup:
-    """Основные действия сверху; передача и удаление — отдельным блоком снизу."""
+    """Группы: управление · деньги · контент · опасные действия."""
     i = b["id"]
     running = b["desired"] and b["status"] in ("running", "restarting")
     from creator.content import callback
     from creator.engagement import request as activity_request
     from creator.presentation import callback as presentation_callback
 
-    return ikb(
+    rows = [
         [btn("⏹ Остановить", f"b:{i}:stop") if running else btn("▶️ Запустить", f"b:{i}:start")],
-        [btn("🔄 Перезапустить", f"b:{i}:restart")] if running else [],
+    ]
+    if running:
+        rows.append([btn("🔄 Перезапустить", f"b:{i}:restart")])
+    rows += [
+        [btn("📊 Статистика", f"bst:{i}"), btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready")],
         [btn("💳 Хостинг", f"b:{i}:host"), btn("👑 VIP", f"b:{i}:vip")],
-        [btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready"), btn("📊 Статистика", f"bst:{i}")],
-        [btn("🎨 Сценарий и оформление", presentation_callback(i, "home"))],
-        [btn("📈 Активность", activity_request(i))]
-        + ([btn("📚 Контент бота", callback(b, "home"))] if b['template'] in {"refbot", "starbot", "clicker"} else []),
-        [btn("⚙️ Настройки", f"b:{i}:set"),
-         btn("🚫 Снять с продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
-        [btn("💳 LavePay выплаты", f"olp:{i}")] if b["template"] in {"clicker", "refbot"} else [],
-        [btn("💸 Доп заработок", f"b:{i}:tg")] if tgrass else [],
-        [btn("🔗 Вебхуки отписок", f"b:{i}:wh")] if webhooks else [],
-        [btn("🔁 Передать бота", f"b:{i}:transfer")],
-        [btn("🗑 Удалить", f"b:{i}:del")],
+        [btn("🎨 Оформление", presentation_callback(i, "home")),
+         btn("📈 Активность", activity_request(i))],
+    ]
+    if b["template"] in {"refbot", "starbot", "clicker"}:
+        rows.append([btn("📚 Контент", callback(b, "home"))])
+    if b["template"] in {"clicker", "refbot"}:
+        rows.append([btn("💳 LavePay выплаты", f"olp:{i}")])
+    rows.append([
+        btn("⚙️ Настройки", f"b:{i}:set"),
+        btn("🚫 С продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell"),
+    ])
+    if tgrass:
+        rows.append([btn("💸 Доп заработок", f"b:{i}:tg")])
+    if webhooks:
+        rows.append([btn("🔗 Вебхуки", f"b:{i}:wh")])
+    rows += [
+        [btn("🔁 Передать", f"b:{i}:transfer"), btn("🗑 Удалить", f"b:{i}:del")],
         [btn("⬅️ Назад", "mybots")],
-    )
+    ]
+    return ikb(*rows)

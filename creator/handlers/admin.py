@@ -39,36 +39,47 @@ router.callback_query.filter(IsAdmin())
 
 
 def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
-    row = [btn("🤖 Боты", "a:bots")]
+    # Группы: обзор · люди и боты · рассылки · финансы · инструменты
+    people = [btn("👤 Пользователи", "a:users"), btn("🤖 Боты", "a:bots")]
+    find = [btn("🔎 Найти бота", "a:botfind")]
+    broadcasts = [btn("📢 Конструктор", "a:bc"), btn("📢 По ботам", "a:bcb")]
+    finance = [btn("💰 Цены", "a:prices"), btn("💳 LavePay", "a:lave:0")]
+    tools = [btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")]
+    rows = [
+        [btn("📊 Статистика", "a:stats")],
+        people,
+        find,
+        broadcasts,
+        finance,
+        tools,
+    ]
     if ctx is not None and ctx.tgrass is not None:
-        row.append(btn("💸 TGrass", "a:tg"))
+        rows.append([btn("💸 TGrass", "a:tg")])
     if ctx is not None and ctx.piarflow is not None:
-        row.append(btn("🚀 PiarFlow", "a:pf"))
-    extra = []
+        rows.append([btn("🚀 PiarFlow", "a:pf")])
     if ctx is not None and getattr(ctx, "unsub", None):
-        extra.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
-    return ikb([btn("📊 Статистика", "a:stats"), btn("💰 Цены", "a:prices")],
-               [btn("📢 Рассылка", "a:bc"), btn("📢 По ботам", "a:bcb")],
-               [btn("👤 Пользователи", "a:users")],
-               row, [btn("🔎 Найти бота", "a:botfind"), btn("📜 Журнал", "a:alog:0")],
-               [btn("💳 LavePay", "a:lave:0")],
-               [btn("📡 Источники ОП", "src:home")],
-               *extra,
-               *([[btn("💸 Заявки на вывод", "a:wd:0")]] if ctx is not None and uid is not None
-                 and uid == ctx.cfg.approver else []))
+        rows.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
+    if ctx is not None and uid is not None and uid == ctx.cfg.approver:
+        rows.append([btn("💸 Заявки на вывод", "a:wd:0")])
+    return ikb(*rows)
 
 
 def panel_text(ctx: Ctx) -> str:
     """Recorded counts only (no money aggregates); recorded status is not a live Telegram check."""
     q = ctx.db.scalar
     users = q("SELECT COUNT(*) FROM users") or 0
+    banned = q("SELECT COUNT(*) FROM users WHERE banned=1") or 0
     bots = q("SELECT COUNT(*) FROM bots WHERE deleted=0") or 0
     running = q("SELECT COUNT(*) FROM bots WHERE deleted=0 AND status='running'") or 0
     errors = q("SELECT COUNT(*) FROM bots WHERE deleted=0 AND status='error'") or 0
+    deleted = q("SELECT COUNT(*) FROM bots WHERE deleted=1") or 0
     alive = sum(1 for i in list(ctx.sup.children) if ctx.sup.is_running(i))
+    shops = q("SELECT COUNT(*) FROM owner_lavepay_shops") or 0
     return ("🛠 <b>Админ-панель</b>\n\n"
-            f"Обзор: пользователей {users} · ботов {bots} · running {running} · error {errors} · "
-            f"процессов {alive}\n<i>Это записанный статус и процессы супервизора, не проверка ответа Telegram.</i>")
+            f"Пользователей: {users} (забаненных {banned})\n"
+            f"ботов {bots} · running {running} · error {errors} · удалённых {deleted}\n"
+            f"Процессов: {alive} · магазинов LavePay: {shops}\n"
+            f"<i>Это записанный статус и процессы супервизора, не проверка ответа Telegram.</i>")
 
 
 @router.message(Command("admin"))
@@ -165,6 +176,7 @@ async def price_set(message: Message, state: FSMContext, ctx: Ctx) -> None:
         return
     await state.clear()
     ctx.db.kv_set(f"price:{key}", str(value))
+    ctx.db.log_admin(message.from_user.id, "price", target=key, detail=f"new={value}")
     await message.answer(f"✅ {PRICE_KEYS[key]}: {show_price(key, value)}",
                          reply_markup=ikb([btn("💰 К ценам", "a:prices")]))
 
@@ -703,34 +715,52 @@ async def bot_card(cb: CallbackQuery, ctx: Ctx) -> None:
     await cb.message.edit_text(view[0], reply_markup=view[1])
     await cb.answer()
 
+LOG_FILTERS = ("all", "ban", "balance", "bot", "price", "broadcast")
+LOG_LABELS = {"all": "все", "ban": "бан", "balance": "баланс", "bot": "боты", "price": "цены", "broadcast": "рассылки"}
+
+
+def _log_where(flt: str) -> str:
+    return {
+        "ban": "WHERE action IN ('ban','unban')",
+        "balance": "WHERE action='balance'",
+        "bot": "WHERE action LIKE 'bot_%'",
+        "price": "WHERE action='price'",
+        "broadcast": "WHERE action LIKE 'broadcast%'",
+    }.get(flt, "")
+
+
 @router.callback_query(F.data.startswith("a:alog:"))
 async def admin_log(cb: CallbackQuery, ctx: Ctx) -> None:
     parts = cb.data.split(":")
-    if len(parts) != 3 or not parts[2].isdigit():
+    if len(parts) < 3 or not parts[2].isdigit():
         await cb.answer("Кнопка устарела", show_alert=True)
         return
     page = int(parts[2])
-    total = ctx.db.admin_actions_count()
+    flt = parts[3] if len(parts) > 3 and parts[3] in LOG_FILTERS else "all"
+    where = _log_where(flt)
+    total = ctx.db.scalar(f"SELECT COUNT(*) FROM admin_actions {where}") or 0
     pages = max(1, -(-total // PAGE))
     page = max(0, min(page, pages - 1))
-    rows = ctx.db.admin_actions(limit=PAGE, offset=page * PAGE)
-    lines = [f"📜 <b>Журнал админ-действий</b> · стр. {page + 1}/{pages} · всего {total}"]
+    rows = ctx.db.all(f"SELECT * FROM admin_actions {where} ORDER BY id DESC LIMIT ? OFFSET ?", PAGE, page * PAGE)
+    lines = [f"📜 <b>Журнал</b> · {LOG_LABELS[flt]} · стр. {page + 1}/{pages} · всего {total}"]
     for r in rows:
         when = time.strftime("%m-%d %H:%M", time.localtime(r["created_at"]))
-        action = html.escape(r['action'])
-        target = html.escape(r['target'] or '')
-        detail = html.escape((r['detail'] or '')[:60])
+        action = html.escape(r["action"])
+        target = html.escape(r["target"] or "")
+        detail = html.escape((r["detail"] or "")[:50])
         lines.append(f"{when} · <code>{r['admin_id']}</code> · {action} · {target} · {detail}")
     if not rows:
         lines.append("Пусто")
     nav = []
     if page > 0:
-        nav.append(btn("⬅️", f"a:alog:{page - 1}"))
+        nav.append(btn("⬅️", f"a:alog:{page - 1}:{flt}"))
     if page < pages - 1:
-        nav.append(btn("➡️", f"a:alog:{page + 1}"))
-    kb = ikb(*( [nav] if nav else [] ), [btn("⬅️ Назад", "a:main")])
+        nav.append(btn("➡️", f"a:alog:{page + 1}:{flt}"))
+    filters = [btn(lbl, f"a:alog:0:{key}") for key, lbl in LOG_LABELS.items()]
+    kb = ikb(*([nav] if nav else []), filters[:3], filters[3:], [btn("⬅️ Назад", "a:main")])
     await cb.message.edit_text("\n".join(lines), reply_markup=kb)
     await cb.answer()
+
 
 @router.callback_query(F.data.startswith("a:lave:"))
 async def lavepay_summary(cb: CallbackQuery, ctx: Ctx) -> None:
