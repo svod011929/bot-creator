@@ -425,3 +425,15 @@ async def test_fresh_menu_context_wins_over_inflight_old_page(listing, monkeypat
     assert "Страница 1 из 3" in last(w)
     assert w.ctx.bot_lists[OWNER].page == 0
     assert callback(w, ":search").split(":")[1] == w.ctx.bot_lists[OWNER].nonce
+
+
+
+async def test_my_bots_list_shows_user_counts(listing):
+    from tests.test_admin_panel import _child_users
+    w = listing
+    _child_users(w.ctx, w.ids[0], [(10, {}), (11, {})])
+    await w.feed(msg_update(OWNER, "🤖 Мои боты"))
+    text = last(w)
+    assert f"ID {w.ids[0]}" in text and "пользователей 2" in text
+    labels = [b.text for row in keyboard(w) for b in row]
+    assert any(f"ID {w.ids[0]} · 2 👤" in t for t in labels)

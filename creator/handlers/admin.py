@@ -20,6 +20,7 @@ from creator.keyboards import BTN_ADMIN, STATUS_TEXT, btn, cancel_kb, ikb, statu
 from creator.money import parse_rub, rub
 from creator.services import Ctx
 from creator.states import Admin
+from creator.tgrass import child_users_for_card
 
 router = Router(name="admin")
 
@@ -33,6 +34,9 @@ class IsAdmin(Filter):
 PAGE = 10
 BOT_ACTIONS = ("", "start", "stop", "del", "delask")
 
+def _users_label(ctx: Ctx, bot_id: int) -> str:
+    n = child_users_for_card(ctx.sup.bot_dir(bot_id))
+    return "н/д" if n is None else str(n)
 
 router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
@@ -627,8 +631,11 @@ async def bots(cb: CallbackQuery, ctx: Ctx) -> None:
     pages = max(1, -(-total // PAGE))
     page = min(page, pages - 1)
     rows = ctx.db.all(f"SELECT * FROM bots {where} ORDER BY id DESC LIMIT ? OFFSET ?", *args, PAGE, page * PAGE)
-    kb = [[btn(f"ID {b['id']} {status_icon(b['status'])} @{b['username']} | {templates.info(b['template']).title}",
-               f"a:bot:{b['id']}")] for b in rows]
+    def _bot_btn(b):
+        label = (f"ID {b['id']} {status_icon(b['status'])} @{b['username']} "
+                 f"· {_users_label(ctx, b['id'])} 👤 | {templates.info(b['template']).title}")
+        return [btn(label, f"a:bot:{b['id']}")]
+    kb = [_bot_btn(b) for b in rows]
     def _page_cb(p):
         return f"a:bots:{p}" if flt == "all" else f"a:bots:{p}:{flt}"
     nav = ([btn("⬅️", _page_cb(page - 1))] if page > 0 else []) + \
@@ -665,7 +672,8 @@ async def bot_lookup(message: Message, state: FSMContext, ctx: Ctx) -> None:
             if owned:
                 await state.clear()
                 kb = ikb(
-                    *[[btn(f"ID {b['id']} @{b['username'] or '—'}", f"a:bot:{b['id']}")] for b in owned],
+                    *[[btn(f"ID {b['id']} @{b['username'] or '—'} · {_users_label(ctx, b['id'])} 👤",
+                           f"a:bot:{b['id']}")] for b in owned],
                     [btn("⬅️ Боты", "a:bots")],
                 )
                 await message.answer(f"Боты владельца <code>{raw}</code> ({len(owned)}):", reply_markup=kb)
@@ -688,8 +696,10 @@ def bot_view(ctx: Ctx, bot_id: int, action: str):
     b = ctx.db.bot(bot_id)
     if not b:
         return None
+    users_s = _users_label(ctx, b["id"])
     text = (f"🤖 <b>Бот ID {b['id']}</b> @{html.escape(b['username'] or '')}\nВладелец: <code>{b['owner_id']}</code>\n"
             f"Шаблон: {templates.info(b['template']).title}\nСтатус: {STATUS_TEXT.get(b['status'], b['status'])}\n"
+            f"Пользователей: {users_s}\n"
             f"Хостинг: {rub(b['hosting_balance'])}\nVIP: {'да' if b['vip'] else 'нет'}\n"
             f"Ошибка: {html.escape(b['last_error'] or '—')}")
     rows = [

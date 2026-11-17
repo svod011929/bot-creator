@@ -130,7 +130,7 @@ async def test_my_bots_card_and_actions(env):
     session.clear()
     await feed(msg_update(OWNER, "🤖 Мои боты"))
     lst = session.of(SendMessage)[-1]
-    assert lst.reply_markup.inline_keyboard[0][0].text == f"ID {bot_id} | Кликер бот 🟢"
+    assert lst.reply_markup.inline_keyboard[0][0].text == f"ID {bot_id} · 0 👤 | Кликер бот 🟢"
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     card = session.texts()[-1]
     for part in ("Статус: 🟢 Запущен", "@my_clicker_bot", "Шаблон: ⛏ Кликер бот", "Использование диска",

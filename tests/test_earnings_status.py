@@ -185,7 +185,10 @@ async def test_all_templates_readonly_views_keep_rows_files_and_list_context(ear
             assert "не проверяются" in last(w).text
     assert "\n".join(w.db.conn.iterdump()) == before
     assert w.ctx.bot_lists == context and await w.state.get_state() is None
-    assert all((p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) == v for p, v in files.items())
+    sidecars = {".db-shm", ".db-wal", ".db-journal"}
+    assert all((p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) == v
+               for p, v in files.items() if p.suffix not in sidecars and not any(p.name.endswith(s) for s in sidecars))
+    assert all(p.read_bytes() == v[0] for p, v in files.items())
     assert not w.session.of(SendMessage)
 
 
