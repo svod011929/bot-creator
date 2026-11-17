@@ -374,3 +374,22 @@ async def test_admin_panel_has_submenus_with_all_buttons(env):  # noqa: F811
     n = len(session.texts())
     await feed(cb_update(OWNER, "a:g:fin"))
     assert len(session.texts()) == n or "Финансы" not in session.texts()[-1]
+
+
+async def test_admin_bot_lists_show_child_user_counts(env):  # noqa: F811
+    ctx, feed, session = env
+    ids = seed_bots(ctx, 2)
+    _child_users(ctx, ids[0], [(10, {}), (11, {})])
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:g:people"))
+    await feed(cb_update(ADMIN, "a:bots"))
+    labels = [t for t, _ in inline(session.of(EditMessageText)[-1])]
+    assert any(f"ID {ids[0]}" in t and "2 👤" in t for t in labels)
+    assert any(f"ID {ids[1]}" in t and "0 👤" in t for t in labels)
+    await feed(cb_update(ADMIN, f"a:bot:{ids[0]}"))
+    assert "Пользователей: 2" in session.texts()[-1]
+    await feed(cb_update(ADMIN, "a:botfind"))
+    await feed(msg_update(ADMIN, str(OWNER)))
+    labels = [t for t, _ in inline(session.of(SendMessage)[-1])]
+    assert any(f"ID {ids[0]}" in t and "2 👤" in t for t in labels)
+    assert "Боты владельца" in session.texts()[-1]

@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from child import templates
 from creator.bot_setup import bot_url
 from creator.keyboards import STATUS_ICON, btn, ikb
+from creator.tgrass import child_users_for_card
 
 STATUSES = {"all": "Все", "running": "Запущен", "stopped": "Остановлен",
             "restarting": "Перезапускается", "error": "Ошибка"}
@@ -109,8 +110,11 @@ def render(ctx, uid: int, view: View):
         except KeyError:
             title = "Неизвестный шаблон"
         name = "@" + row["username"] if bot_url(row) else "username недоступен"
-        lines.append(f"ID {row['id']} · {html.escape(name)}")
-        buttons.append([btn(f"ID {row['id']} | {title} {STATUS_ICON.get(row['status'], '⚪')}", f"b:{row['id']}:open")])
+        n = child_users_for_card(ctx.cfg.bots_dir / str(row["id"]))
+        users_s = "н/д" if n is None else str(n)
+        lines.append(f"ID {row['id']} · {html.escape(name)} · пользователей {users_s}")
+        label = f"ID {row['id']} · {users_s} 👤 | {title} {STATUS_ICON.get(row['status'], '⚪')}"
+        buttons.append([btn(label, f"b:{row['id']}:open")])
     if not rows:
         lines.append("Боты не найдены.")
         if not view.query and view.status == "all":
