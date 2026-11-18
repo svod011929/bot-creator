@@ -28,7 +28,8 @@ def _lines(ctx: Ctx, bot_id: int) -> str | None:
     if pf:
         url = html.escape(service.url(bot_id, "piarflow"))
         parts.append(f"{PF_PASTE}\n"
-                     f"<code>{url}</code>\n")
+                     f"<code>{url}</code>\n"
+                     "<i>Один адрес на весь аккаунт PiarFlow, без секрета. Событие уходит нужному боту по bot_id.</i>\n")
     if not tg and not pf:
         parts.append("Сети ещё не подключены к этому боту — адрес появится после одобрения заявки.")
     parts.append("\nНикому не пересылайте эти ссылки: кто их знает, сможет слать ложные отписки.")
@@ -64,7 +65,7 @@ async def show_hub(cb: CallbackQuery, ctx: Ctx) -> None:
         "Эти адреса — для режима трансляции (общий ключ источника креатора). "
         "Вставьте их в кабинете хаб-бота сетей. Владельцам дочерних ботов их не отправляйте.\n\n"
         f"{TG_PASTE}\n<code>{html.escape(service.hub_url('tgrass'))}</code>\n\n"
-        f"{PF_PASTE}\n<code>{html.escape(service.hub_url('piarflow'))}</code>\n\n"
+        f"{PF_PASTE} (один на весь аккаунт, без секрета)\n<code>{html.escape(service.shared_piarflow_url())}</code>\n\n"
         "Штраф за отписку равен начисленной награде и действует после того, "
         "как адрес установлен.\n\n"
         "Никому не пересылайте эти ссылки: кто их знает, сможет слать ложные отписки."
