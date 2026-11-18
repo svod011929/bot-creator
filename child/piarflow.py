@@ -63,12 +63,31 @@ class PiarFlowGate:
         self._session: aiohttp.ClientSession | None = None
         self._pass_until: dict[int, float] = {}
         self._pending: dict[int, list[str]] = {}
+        self._pass_limit = 5000
         with db.lock:
             db.conn.executescript(SCHEMA)
             db.conn.execute(
                 "CREATE TABLE IF NOT EXISTS sponsor_gate_reset ("
                 "user_id INTEGER NOT NULL, provider TEXT NOT NULL, reset_at INTEGER NOT NULL, "
                 "PRIMARY KEY (user_id, provider))")
+
+
+    def _remember_pass(self, uid: int, until: float) -> None:
+        if len(self._pass_until) >= self._pass_limit:
+            now = time.time()
+            self._pass_until = {k: v for k, v in self._pass_until.items() if v > now}
+            if len(self._pass_until) >= self._pass_limit:
+                items = sorted(self._pass_until.items(), key=lambda kv: kv[1])
+                self._pass_until = dict(items[-(self._pass_limit - 1):])
+        self._pass_until[uid] = until
+
+    def _remember_pending(self, uid: int, left: list[str]) -> None:
+        """Write into the cache. Must not call itself."""
+        if len(self._pending) >= self._pass_limit:
+            overflow = len(self._pending) - self._pass_limit + 1
+            for key in list(self._pending)[:overflow]:
+                self._pending.pop(key, None)
+        self._pending[uid] = left
 
     async def _post(self, path: str, body: dict) -> tuple[int, dict | None, int]:
         """(HTTP-статус, JSON|None, duration_ms). Успешный done-лог — на стороне вызывающего."""
@@ -148,7 +167,7 @@ class PiarFlowGate:
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _pass(self, uid: int, ttl: float) -> None:
-        self._pass_until[uid] = time.time() + ttl
+        self._remember_pass(uid, time.time() + ttl)
         self._pending.pop(uid, None)
 
     async def check(self, u: User, force: bool = False) -> InlineKeyboardMarkup | None:
@@ -180,7 +199,7 @@ class PiarFlowGate:
             st = dict(items)
             left = [link for link in pending if st.get(link, "unsubscribed") not in DONE_STATUSES]
             if left:
-                self._pending[uid] = left
+                self._remember_pending(uid, left)
                 return self.keyboard(left)
             self._pass(uid, PASS_TTL)
             return None
@@ -206,7 +225,7 @@ class PiarFlowGate:
         todo = [link for link, s in items if s not in DONE_STATUSES]
         if todo:
             self._mark_shown(uid, todo)
-            self._pending[uid] = todo
+            self._remember_pending(uid, todo)
             result = "show_gate"
             kb: InlineKeyboardMarkup | None = self.keyboard(todo)
         else:
