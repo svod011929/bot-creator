@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -58,6 +59,12 @@ class Supervisor:
         self.crashes: dict[int, list[float]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._stopping = False
+        self.shared = (getattr(cfg, "child_runtime", "process") or "process") == "shared"
+        self._worker: asyncio.subprocess.Process | None = None
+        self._worker_task: asyncio.Task | None = None
+        self._shared_running: set[int] = set()
+        self._worker_sock = self.cfg.data_dir / "worker.sock"
+        self._sync_task: asyncio.Task | None = None
 
     def _bot_lock(self, bot_id: int) -> asyncio.Lock:
         return self._locks.setdefault(bot_id, asyncio.Lock())
@@ -93,6 +100,9 @@ class Supervisor:
         return d
 
     def is_running(self, bot_id: int) -> bool:
+        if self.shared:
+            alive = self._worker is not None and self._worker.returncode is None
+            return alive and bot_id in self._shared_running
         c = self.children.get(bot_id)
         return c is not None and c.proc.returncode is None
 
@@ -123,6 +133,9 @@ class Supervisor:
         log.info("bot %s started pid=%s", bot_id, proc.pid)
 
     async def start(self, bot_id: int, *, require_desired: bool = False) -> None:
+        if self.shared:
+            await self._shared_start(bot_id, require_desired=require_desired)
+            return
         async with self._bot_lock(bot_id):
             await self._start(bot_id, require_desired=require_desired)
 
@@ -150,11 +163,17 @@ class Supervisor:
             pass
 
     async def stop(self, bot_id: int, status: str = "stopped") -> None:
+        if self.shared:
+            await self._shared_stop(bot_id, status=status)
+            return
         async with self._bot_lock(bot_id):
             self.db.update_bot(bot_id, desired=0, status=status)
             await self._terminate(bot_id)
 
     async def restart(self, bot_id: int, *, require_desired: bool = False) -> None:
+        if self.shared:
+            await self._shared_restart(bot_id, require_desired=require_desired)
+            return
         async with self._bot_lock(bot_id):
             b = self.db.bot(bot_id)
             if self._stopping or not b or (require_desired and not b["desired"]):
@@ -163,6 +182,15 @@ class Supervisor:
             await self._start(bot_id, require_desired=require_desired)
 
     async def start_all(self) -> int:
+        if self.shared:
+            n = 0
+            for b in self.db.bots_to_run():
+                try:
+                    await self.start(b["id"])
+                    n += 1
+                except Exception:  # noqa: BLE001
+                    log.exception("cannot start bot %s", b["id"])
+            return n
         n = 0
         for b in self.db.bots_to_run():
             try:
@@ -175,6 +203,9 @@ class Supervisor:
     async def shutdown(self) -> None:
         """Остановка конструктора: гасим процессы, но desired не трогаем — после рестарта поднимутся."""
         self._stopping = True
+        if self.shared:
+            await self._shared_shutdown()
+            return
         async def terminate_locked(bot_id):
             async with self._bot_lock(bot_id):
                 await self._terminate(bot_id)
@@ -211,6 +242,185 @@ class Supervisor:
             b = self.db.bot(bot_id)
             if b and b["desired"] and not self._stopping and not self.is_running(bot_id):
                 await self._spawn(bot_id)
+
+    def child_env(self) -> dict[str, str]:
+        """Whitelist only. Creator secrets never go to a child or the worker."""
+        env = {k: v for k, v in os.environ.items() if k in CHILD_ENV_KEYS}
+        env["PYTHONUNBUFFERED"] = "1"
+        return env
+
+    async def _ensure_worker(self) -> None:
+        if self._worker is not None and self._worker.returncode is None:
+            return
+        self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
+        if self._worker_sock.exists():
+            self._worker_sock.unlink()
+        logf = self.cfg.data_dir / "worker.log"
+        env = self.child_env()
+        with open(logf, "ab") as out:
+            self._worker = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "child.worker", "--socket", str(self._worker_sock),
+                cwd=str(PROJECT_ROOT), env=env,
+                stdout=out, stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
+            )
+        self._worker_task = asyncio.create_task(self._watch_worker())
+        if self._sync_task is None or self._sync_task.done():
+            self._sync_task = asyncio.create_task(self._sync_shared_loop())
+        for _ in range(100):
+            if self._worker_sock.exists():
+                return
+            if self._worker.returncode is not None:
+                raise RuntimeError("worker exited before socket")
+            await asyncio.sleep(0.05)
+        raise RuntimeError("worker socket did not appear")
+
+    async def _worker_cmd(self, payload: dict) -> dict:
+        await self._ensure_worker()
+        reader, writer = await asyncio.open_unix_connection(str(self._worker_sock))
+        try:
+            writer.write((json.dumps(payload) + "\n").encode())
+            await writer.drain()
+            line = await asyncio.wait_for(reader.readline(), timeout=30)
+            return json.loads(line.decode() or "{}")
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _shared_start(self, bot_id: int, *, require_desired: bool = False) -> None:
+        async with self._bot_lock(bot_id):
+            b = self.db.bot(bot_id)
+            if self._stopping or not b or (require_desired and not b["desired"]):
+                return
+            self.db.update_bot(bot_id, desired=1)
+            if self.is_running(bot_id):
+                return
+            d = self.write_files(bot_id)
+            reply = await self._worker_cmd({"cmd": "start", "id": bot_id, "dir": str(d)})
+            if reply.get("ok"):
+                self._shared_running.add(bot_id)
+                self.db.update_bot(bot_id, status="running", last_error=None)
+            else:
+                self.db.update_bot(bot_id, status="error", last_error=str(reply.get("error") or "worker")[:200])
+
+    async def _shared_stop(self, bot_id: int, status: str = "stopped") -> None:
+        async with self._bot_lock(bot_id):
+            self.db.update_bot(bot_id, desired=0, status=status)
+            self._shared_running.discard(bot_id)
+            if self._worker is not None and self._worker.returncode is None:
+                await self._worker_cmd({"cmd": "stop", "id": bot_id})
+
+    async def _shared_restart(self, bot_id: int, *, require_desired: bool = False) -> None:
+        async with self._bot_lock(bot_id):
+            b = self.db.bot(bot_id)
+            if self._stopping or not b or (require_desired and not b["desired"]):
+                return
+            self.db.update_bot(bot_id, desired=1)
+            d = self.write_files(bot_id)
+            reply = await self._worker_cmd({"cmd": "restart", "id": bot_id, "dir": str(d)})
+            if reply.get("ok"):
+                self._shared_running.add(bot_id)
+                self.db.update_bot(bot_id, status="running", last_error=None)
+
+    async def _shared_reload(self, bot_id: int) -> None:
+        """Перезагрузить настройки одного бота (перечитать config.json), остальных не трогать."""
+        d = self.write_files(bot_id)
+        reply = await self._worker_cmd({"cmd": "reload", "id": bot_id, "dir": str(d)})
+        if reply.get("ok"):
+            self._shared_running.add(bot_id)
+
+    async def _shared_shutdown(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+            try:
+                await self._sync_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._sync_task = None
+        if self._worker is not None and self._worker.returncode is None:
+            try:
+                await self._worker_cmd({"cmd": "shutdown"})
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._worker.terminate()
+                await asyncio.wait_for(self._worker.wait(), timeout=10)
+            except Exception:  # noqa: BLE001
+                try:
+                    self._worker.kill()
+                except ProcessLookupError:
+                    pass
+        self._shared_running.clear()
+
+    async def _watch_worker(self) -> None:
+        if self._worker is None:
+            return
+        code = await self._worker.wait()
+        if self._stopping:
+            return
+        log.error("worker exited %s, restarting", code)
+        self._shared_running.clear()
+        await asyncio.sleep(2)
+        if self._stopping:
+            return
+        try:
+            await self.start_all()
+        except Exception:  # noqa: BLE001
+            log.exception("worker restart failed")
+
+    async def _sync_shared_loop(self) -> None:
+        while not self._stopping:
+            try:
+                await self._sync_shared()
+            except Exception:  # noqa: BLE001
+                log.exception("shared status sync failed")
+            await asyncio.sleep(1)
+
+    async def _sync_shared(self) -> None:
+        if self._stopping or self._worker is None or self._worker.returncode is not None:
+            return
+        reply = await self._worker_cmd({"cmd": "status"})
+        if not reply.get("ok"):
+            return
+        running = {int(i) for i in reply.get("running") or []}
+        for item in reply.get("exits") or []:
+            bot_id = int(item.get("id") or 0)
+            code = int(item.get("code") or 1)
+            if bot_id:
+                await self._handle_shared_exit(bot_id, code)
+        self._shared_running &= running
+        self._shared_running |= running
+
+    async def _handle_shared_exit(self, bot_id: int, code: int) -> None:
+        """Same policy as a child process exit: bad token, crash window, notify, restart."""
+        self._shared_running.discard(bot_id)
+        if self._stopping:
+            return
+        b = self.db.bot(bot_id)
+        if not b or not b["desired"]:
+            self.db.update_bot(bot_id, status="stopped")
+            return
+        if code == EXIT_BAD_TOKEN:
+            self.db.update_bot(bot_id, desired=0, status="error", last_error="Неверный токен")
+            await self._notify(bot_id, f"⚠️ Бот ID {bot_id} остановлен: токен недействителен. "
+                                       "Возможно, его перевыпустили в @BotFather.")
+            return
+        now = time.monotonic()
+        hist = [t for t in self.crashes.get(bot_id, []) if now - t < CRASH_WINDOW] + [now]
+        self.crashes[bot_id] = hist
+        if len(hist) >= MAX_CRASHES:
+            self.db.update_bot(bot_id, desired=0, status="error", last_error=f"Частые падения (код {code})")
+            await self._notify(bot_id, f"⚠️ Бот ID {bot_id} несколько раз упал и остановлен. "
+                                       "Нажмите «Запустить» в карточке бота или напишите администратору.")
+            return
+        delay = min(60, 2 ** len(hist))
+        log.warning("bot %s exited with %s, restart in %ss", bot_id, code, delay)
+        self.db.update_bot(bot_id, status="restarting", last_error=f"Перезапуск после падения (код {code})")
+        await asyncio.sleep(delay)
+        if not self._stopping:
+            await self._shared_start(bot_id)
 
     def remove_files(self, bot_id: int) -> None:
         d = self.bot_dir(bot_id)

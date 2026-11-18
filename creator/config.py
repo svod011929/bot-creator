@@ -107,6 +107,7 @@ class Config:
     child_lavepay_payouts: bool = False  # global flag; default OFF, no real child payouts
     child_lavepay_payouts_auto: bool = False
     child_lavepay_daily_limit_rub: int = 0  # 0 — no platform daily cap
+    child_runtime: str = "process"  # process | shared
     owner_payout_key: str = ""  # Fernet or passphrase; never given to children
 
     @property
@@ -221,5 +222,6 @@ def load_config(env_file: Path | None = None) -> Config:
         child_lavepay_payouts=_flag("CHILD_LAVEPAY_PAYOUTS", False),
         child_lavepay_payouts_auto=_flag("CHILD_LAVEPAY_PAYOUTS_AUTO", False),
         child_lavepay_daily_limit_rub=max(0, _int("CHILD_LAVEPAY_DAILY_LIMIT_RUB", 0)),
+        child_runtime=(os.environ.get("CHILD_RUNTIME", "process").strip().lower() or "process"),
         owner_payout_key=os.environ.get("OWNER_PAYOUT_KEY", "").strip(),
     )
