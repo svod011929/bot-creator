@@ -65,6 +65,7 @@ class Supervisor:
         self._shared_running: set[int] = set()
         self._worker_sock = self.cfg.data_dir / "worker.sock"
         self._sync_task: asyncio.Task | None = None
+        self._worker_lock = asyncio.Lock()
 
     def _bot_lock(self, bot_id: int) -> asyncio.Lock:
         return self._locks.setdefault(bot_id, asyncio.Lock())
@@ -249,30 +250,38 @@ class Supervisor:
         env["PYTHONUNBUFFERED"] = "1"
         return env
 
-    async def _ensure_worker(self) -> None:
-        if self._worker is not None and self._worker.returncode is None:
-            return
-        self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
-        if self._worker_sock.exists():
-            self._worker_sock.unlink()
-        logf = self.cfg.data_dir / "worker.log"
-        env = self.child_env()
-        with open(logf, "ab") as out:
-            self._worker = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "child.worker", "--socket", str(self._worker_sock),
-                cwd=str(PROJECT_ROOT), env=env,
-                stdout=out, stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
-            )
-        self._worker_task = asyncio.create_task(self._watch_worker())
-        if self._sync_task is None or self._sync_task.done():
-            self._sync_task = asyncio.create_task(self._sync_shared_loop())
-        for _ in range(100):
+    async def _wait_worker_socket(self, timeout: float = 60) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._worker is not None and self._worker.returncode is not None:
+                raise RuntimeError("worker exited before socket")
             if self._worker_sock.exists():
                 return
-            if self._worker.returncode is not None:
-                raise RuntimeError("worker exited before socket")
             await asyncio.sleep(0.05)
         raise RuntimeError("worker socket did not appear")
+
+    async def _ensure_worker(self) -> None:
+        async with self._worker_lock:
+            if self._worker is not None and self._worker.returncode is None and self._worker_sock.exists():
+                return
+            if self._worker is not None and self._worker.returncode is None:
+                await self._wait_worker_socket()
+                return
+            self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
+            if self._worker_sock.exists():
+                self._worker_sock.unlink()
+            logf = self.cfg.data_dir / "worker.log"
+            env = self.child_env()
+            with open(logf, "ab") as out:
+                self._worker = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "child.worker", "--socket", str(self._worker_sock),
+                    cwd=str(PROJECT_ROOT), env=env,
+                    stdout=out, stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
+                )
+            self._worker_task = asyncio.create_task(self._watch_worker())
+            await self._wait_worker_socket()
+            if self._sync_task is None or self._sync_task.done():
+                self._sync_task = asyncio.create_task(self._sync_shared_loop())
 
     async def _worker_cmd(self, payload: dict) -> dict:
         await self._ensure_worker()
