@@ -540,7 +540,7 @@ async def test_existing_lave_invoice_is_not_repriced_by_views(selection, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_microtasks_detail_has_no_demo_and_costs_250(selection):
+async def test_microtasks_detail_has_demo_and_costs_250(selection):
     from creator.states import CreateBot
 
     ctx, feed, session, state = selection
@@ -549,10 +549,9 @@ async def test_microtasks_detail_has_no_demo_and_costs_250(selection):
     text = plain(message.text)
     assert "Задания + проверка" in text
     assert "Стоимость: 250 ₽" in text
-    assert "Демо" not in text
-    assert "DDDMicroTasksBot" not in text
-    assert message.reply_markup.inline_keyboard[0][0].text == "⬅️ Назад"
-    assert message.reply_markup.inline_keyboard[0][0].callback_data == "create"
-    assert all(getattr(b, "url", None) is None for row in message.reply_markup.inline_keyboard for b in row)
+    assert "Демо: @DDDMicroTasksBot" in text
+    assert message.reply_markup.inline_keyboard[0][0].text == "👀 Открыть демо"
+    assert message.reply_markup.inline_keyboard[0][0].url == "https://t.me/DDDMicroTasksBot"
+    assert message.reply_markup.inline_keyboard[1][0].callback_data == "create"
     assert await state.get_state() == CreateBot.token.state
     assert await state.get_data() == {"template": "microtasks"}
