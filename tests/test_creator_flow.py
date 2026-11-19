@@ -78,7 +78,8 @@ async def test_create_bot_rub_from_balance(env):
     await feed(msg_update(OWNER, "🔨 Создать бота"))
     choose = session.of(SendMessage)[-1]
     assert "Выберите шаблон" in choose.text
-    assert [r[0].text for r in choose.reply_markup.inline_keyboard] == ["⛏ Кликер бот", "👥 Реф. бот", "🌟 Звёздный бот"]
+    assert [r[0].text for r in choose.reply_markup.inline_keyboard] == [
+        "⛏ Кликер бот", "👥 Реф. бот", "🌟 Звёздный бот", "✅ Задания + проверка"]
 
     # неверный токен
     await feed(cb_update(OWNER, "tpl:clicker"))

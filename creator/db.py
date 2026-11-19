@@ -433,7 +433,7 @@ class DB:
                     if kop > 0 and c.execute("SELECT 1 FROM users WHERE id=?", (r["user_id"],)).fetchone():
                         self._change_balance(c, r["user_id"], kop, "tgrass", "TGrass: остаток долей при переходе на ₽")
                 c.execute("DROP TABLE tgrass_frac")
-            for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "HOSTING_DAY_PRICE", "VIP_PRICE"):
+            for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS", "HOSTING_DAY_PRICE", "VIP_PRICE"):
                 c.execute("UPDATE kv SET value=CAST(CAST(value AS INTEGER)*? AS TEXT) WHERE key=?", (k, f"price:{key}"))
             old = c.execute("SELECT value FROM kv WHERE key='price:TGRASS_REWARD_CENTI'").fetchone()
             if old and old[0].lstrip("-").isdigit():

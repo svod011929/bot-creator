@@ -15,6 +15,7 @@ PRICE_KEYS = {
     "PRICE_CLICKER": "Шаблон «Кликер бот», ₽",
     "PRICE_REFBOT": "Шаблон «Реф. бот», ₽",
     "PRICE_STARBOT": "Шаблон «Звёздный бот», ₽",
+    "PRICE_MICROTASKS": "Шаблон «Задания + проверка», ₽",
     "HOSTING_DAY_PRICE": "Хостинг, ₽ в сутки",
     "START_HOSTING_DAYS": "Бесплатных дней при создании",
     "VIP_PRICE": "VIP для бота, ₽",
@@ -32,13 +33,14 @@ PRICE_KEYS = {
     "WITHDRAW_FEE_PERCENT": "Вывод: комиссия, %",
 }
 
-MONEY_KEYS = frozenset({"PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "HOSTING_DAY_PRICE", "VIP_PRICE",
+MONEY_KEYS = frozenset({"PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS", "HOSTING_DAY_PRICE", "VIP_PRICE",
                         "TGRASS_REWARD", "PIARFLOW_REWARD", "WITHDRAW_MIN"})
 
 PRICE_DEFAULTS = {
     "PRICE_CLICKER": 22500,      # 225 ₽
     "PRICE_REFBOT": 22500,       # 225 ₽
     "PRICE_STARBOT": 30000,      # 300 ₽
+    "PRICE_MICROTASKS": 25000,   # 250 ₽
     "HOSTING_DAY_PRICE": 450,    # 4,50 ₽ в сутки (7/30/90 дн. = 32/135/405 ₽)
     "START_HOSTING_DAYS": 7,
     "VIP_PRICE": 15000,          # 150 ₽
