@@ -84,6 +84,7 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
     if webhooks:
         rows.append([btn("🔗 Вебхуки", f"b:{i}:wh")])
     rows += [
+        [btn("💡 Подсказки по карточке", f"b:{i}:tips")],
         [btn("🔁 Передать", f"b:{i}:transfer"), btn("🗑 Удалить", f"b:{i}:del")],
         [btn("⬅️ Назад", "mybots")],
     ]

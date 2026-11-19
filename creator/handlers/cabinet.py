@@ -33,7 +33,8 @@ def cabinet_text(ctx: Ctx, uid: int) -> str:
         f"📅 С нами с: {time.strftime('%d.%m.%Y', time.localtime(u['created_at']))}\n"
         f"💰 Баланс: <b>{rub(u['balance'])}</b>\n"
         f"🤖 Ботов: {len(bots)} (запущено {sum(1 for b in bots if b['status'] == 'running')})\n"
-        f"👥 Рефералов: {ctx.db.referrals_count(uid)}, заработано {rub(u['ref_earned'])}"
+        f"👥 Рефералов: {ctx.db.referrals_count(uid)}, заработано {rub(u['ref_earned'])}\n\n"
+        "💡 Пополните баланс, чтобы оплачивать хостинг ботов. История операций — ниже."
     )
 
 
