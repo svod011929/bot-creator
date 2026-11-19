@@ -43,8 +43,12 @@ async def test_help_screen_with_links(env):  # noqa: F811
     before = len(session.requests)
     await feed(cb_update(OWNER, "info:help"))
     screen = session.of(EditMessageText)[-1]
-    for part in ("Запуск", "Хостинг", "Токен", "Выплаты в ваших ботах", "/cancel"):
+    from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
+    for part in ("Запуск", "Хостинг", "Токен", "Выплаты в ваших ботах", "/cancel", "бота заданий"):
         assert part in screen.text
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in screen.text
+    assert LAVEPAY_SIGNUP_URL not in screen.text.replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+    assert screen.disable_web_page_preview is True
     assert kb(screen) == [("💬 Чат", CHAT), ("📢 Канал", CHANNEL), ("👑 Администратор", "https://t.me/DDDDEVELOPER"),
                           ("⛔ Оповестить о проблеме", "info:report"), ("⬅️ Назад", "info:back")]
     new = session.requests[before:]

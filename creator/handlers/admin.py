@@ -591,16 +591,16 @@ async def user_open(cb: CallbackQuery, ctx: Ctx) -> None:
     await cb.answer()
 
 
-BOT_FILTERS = ("all", "clicker", "refbot", "starbot", "running", "stopped", "error", "deleted")
+BOT_FILTERS = ("all", "clicker", "refbot", "starbot", "microtasks", "running", "stopped", "error", "deleted")
 BOT_FILTER_LABEL = {
-    "all": "все", "clicker": "кликер", "refbot": "реф", "starbot": "звезда",
+    "all": "все", "clicker": "кликер", "refbot": "реф", "starbot": "звезда", "microtasks": "задания",
     "running": "running", "stopped": "stopped", "error": "error", "deleted": "удалённые",
 }
 
 def _bot_where(flt: str) -> tuple[str, list]:
     if flt == "deleted":
         return "WHERE deleted=1", []
-    if flt in ("clicker", "refbot", "starbot"):
+    if flt in ("clicker", "refbot", "starbot", "microtasks"):
         return "WHERE deleted=0 AND template=?", [flt]
     if flt in ("running", "stopped", "error"):
         return "WHERE deleted=0 AND status=?", [flt]

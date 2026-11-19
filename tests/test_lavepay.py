@@ -84,9 +84,16 @@ async def test_topup_check_idempotent_and_referral(lenv):
     ctx, feed, session, fake, sent = lenv
     await feed(cb_update(OWNER, "cab:topup"))
     from aiogram.methods import EditMessageText
-    topup_kb = session.of(EditMessageText)[-1].reply_markup.inline_keyboard
+
+    from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
+    topup = session.of(EditMessageText)[-1]
+    topup_kb = topup.reply_markup.inline_keyboard
     assert any(b.callback_data == "lp:t:100" for row in topup_kb for b in row)
     assert not any("⭐" in b.text for row in topup_kb for b in row)
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (topup.text or "")
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">Laveshka</a>' in (topup.text or "")
+    assert LAVEPAY_SIGNUP_URL not in (topup.text or "").replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+    assert topup.disable_web_page_preview is True
     await feed(cb_update(OWNER, "lp:t:150"))
     msg = last_invoice_msg(session)
     row = ctx.db.lave_get(1)
@@ -94,6 +101,9 @@ async def test_topup_check_idempotent_and_referral(lenv):
     assert "150 ₽" in msg.text and "⭐" not in msg.text
     assert msg.reply_markup.inline_keyboard[0][0].url.startswith("https://t.me/laveshka")
     assert msg.reply_markup.inline_keyboard[1][0].callback_data == "lpc:1"
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">Laveshka</a>' in (msg.text or "")
+    assert LAVEPAY_SIGNUP_URL not in (msg.text or "").replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+    assert msg.disable_web_page_preview is True
 
     await feed(cb_update(OWNER, "lpc:1"))  # ещё не оплачен
     assert ctx.db.user(OWNER)["balance"] == 0
