@@ -31,6 +31,11 @@ DESCRIPTIONS = {
         "Меню: «Созвездия», «Маршруты», «Заработать звёзды», «Ежедневный бонус», «Задания», «Топ».\n"
         "Внутренний баланс по умолчанию — звёзды; игровые искры учитываются отдельно и не выводятся."
     ),
+    "microtasks": (
+        "Задания с проверкой: владелец создаёт задания, пользователи выполняют и получают награду после одобрения.\n"
+        "Меню: «Задания», «Мои задания», «Топ», «Пригласить».\n"
+        "Поддерживаются ручная и автоматическая проверка, несколько типов доказательств и очередь заявок."
+    ),
 }
 COMPARISON_FOOTER = (
     "У всех шаблонов есть профиль и заявки на ручную выплату. "
@@ -86,12 +91,22 @@ def comparison_text(ctx: Ctx) -> str:
 def detail_text(ctx: Ctx, key: str) -> str:
     t = templates.info(key)
     price = _nonnegative(ctx.template_price(key))
+    demo = ""
+    if key in DEMO_BOTS:
+        demo = (
+            f"👀 Демо: @{DEMO_BOTS[key]}\n"
+            "Посмотрите готовый пример перед созданием своего бота.\n\n"
+        )
     return _bounded(
         f"{html.escape(t.emoji)} <b>{html.escape(t.title)}</b>\n\n{html.escape(t.description)}\n\n"
-        f"👀 Демо: @{DEMO_BOTS[key]}\nПосмотрите готовый пример перед созданием своего бота.\n\n"
+        f"{demo}"
         f"💰 Стоимость: <b>{html.escape(rub(price))}</b>\n{_hosting_text(ctx)}\n\n{TOKEN_INSTRUCTION}"
     )
 
 
 def detail_kb(key: str):
-    return ikb([url_btn("👀 Открыть демо", "https://t.me/" + DEMO_BOTS[key])], [btn("⬅️ Назад", "create")])
+    rows = []
+    if key in DEMO_BOTS:
+        rows.append([url_btn("👀 Открыть демо", "https://t.me/" + DEMO_BOTS[key])])
+    rows.append([btn("⬅️ Назад", "create")])
+    return ikb(*rows)

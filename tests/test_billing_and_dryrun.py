@@ -40,4 +40,4 @@ def test_dry_run_cli():
     res = subprocess.run([sys.executable, "-m", "creator", "--dry-run"], cwd=ROOT, capture_output=True, text=True,
                          env=env, timeout=120)
     assert res.returncode == 0, res.stderr
-    assert res.stdout.count("[ok] шаблон") == 3
+    assert res.stdout.count("[ok] шаблон") == 4

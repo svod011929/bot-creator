@@ -7,7 +7,7 @@ from child.templates.starbot import parse_task
 
 def test_registry():
     keys = [t.key for t in templates.all_infos()]
-    assert keys == ["clicker", "refbot", "starbot"]
+    assert keys == ["clicker", "refbot", "starbot", "microtasks"]
     for t in templates.all_infos():
         assert t.defaults()["welcome"]
         assert "min_withdraw" in t.defaults()

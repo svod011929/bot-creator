@@ -72,6 +72,7 @@ TEMPLATE_MODULES = {
     "clicker": "child.templates.clicker",
     "refbot": "child.templates.refbot",
     "starbot": "child.templates.starbot",
+    "microtasks": "child.templates.microtasks",
 }
 
 

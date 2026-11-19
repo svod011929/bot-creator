@@ -95,7 +95,7 @@ async def template_selected(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> N
     if snapshot is None:
         return
     key = cb.data.split(":", 1)[1]
-    if key not in {"clicker", "refbot", "starbot"}:
+    if key not in {"clicker", "refbot", "starbot", "microtasks"}:
         await cb.answer("Шаблон не найден. Откройте «Создать бота» заново.", show_alert=True)
         return
     try:
