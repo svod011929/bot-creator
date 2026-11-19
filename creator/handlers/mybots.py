@@ -159,7 +159,7 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
 
     if action == "start":
         if day and b["hosting_balance"] < day:
-            await cb.answer("Недостаточно средств на хостинге. Пополните «💳 Хостинг».", show_alert=True)
+            await cb.answer("Недостаточно средств на хостинге. Откройте «💳 Хостинг» и пополните баланс бота.", show_alert=True)
             return
         await ctx.sup.start(bot_id)
         await cb.answer("▶️ Бот запускается")
@@ -174,7 +174,7 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
 
     elif action == "restart":
         if not b["desired"]:
-            await cb.answer("Бот остановлен — нажмите «Запустить»", show_alert=True)
+            await cb.answer("Бот сейчас остановлен. Сначала нажмите «▶️ Запустить».", show_alert=True)
             return
         await ctx.sup.restart(bot_id)
         await cb.answer("🔄 Бот перезапущен")

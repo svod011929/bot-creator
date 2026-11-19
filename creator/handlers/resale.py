@@ -31,7 +31,10 @@ def market(ctx: Ctx, uid: int, flt: str = "all", number: int = 0):
     rows = [[btn(f"ID {b['id']} | {templates.info(b['template']).title} | {rub(b['sale_price'])}", f"rs:view:{b['id']}")]
             for b in rows_db]
     if not rows_db:
-        text += "\n\nСейчас нет ботов на продаже." if flt == "all" else "\n\nВ этом разделе ботов на продаже нет."
+        if flt == "all":
+            text += "\n\nСейчас нет ботов на продаже. Вы можете выставить своего бота из карточки (кнопка «🛒 Продать»)."
+        else:
+            text += "\n\nВ этом разделе ботов на продаже нет."
     rows.append([btn(("• " if k == flt else "") + t, f"rs:p:{k}:0") for k, t in FILTER_TITLES.items()])
     nav = []
     if number > 0:

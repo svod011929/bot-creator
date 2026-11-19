@@ -121,8 +121,11 @@ async def token_received(message: Message, state: FSMContext, ctx: Ctx) -> None:
     except Exception:  # noqa: BLE001
         pass
     if not TOKEN_RE.match(token):
-        await message.answer("❌ Это не похоже на токен. Пришлите токен из @BotFather целиком.",
-                             reply_markup=cancel_kb())
+        await message.answer(
+            "❌ Это не похоже на токен. Скопируйте его целиком из @BotFather "
+            "(обычно начинается с цифр и двоеточия).",
+            reply_markup=cancel_kb(),
+        )
         return
     if ctx.db.token_in_use(token):
         await message.answer("❌ Этот бот уже подключён к конструктору.", reply_markup=cancel_kb())
@@ -130,8 +133,10 @@ async def token_received(message: Message, state: FSMContext, ctx: Ctx) -> None:
     checking = await message.answer("⏳ Проверяю токен…")
     me = await ctx.validate_token(token)
     if me is None:
-        await checking.edit_text("❌ Токен недействителен. Проверьте его в @BotFather и пришлите ещё раз.",
-                                 reply_markup=cancel_kb())
+        await checking.edit_text(
+            "❌ Токен недействителен. Проверьте в @BotFather, что бот активен, и пришлите токен ещё раз.",
+            reply_markup=cancel_kb(),
+        )
         return
     username, title = me
     data = await state.get_data()
@@ -169,5 +174,21 @@ async def balance_create(cb: CallbackQuery, ctx: Ctx) -> None:
     if bot_id is None:
         await cb.answer("Этот заказ уже использован или устарел. Списание не выполнено. Создайте бота заново.", show_alert=True)
         return
-    await cb.message.edit_text(f"✅ Бот ID {bot_id} создан и запускается! Откройте «🤖 Мои боты».")
+    b = ctx.db.bot(bot_id)
+    template = b["template"] if b else "clicker"
+    text = (
+        f"✅ <b>Бот ID {bot_id} создан и запускается!</b>\n\n"
+        "Что дальше:\n"
+        "1. Откройте карточку бота\n"
+        "2. Нажмите «📋 Первый запуск» — там короткая инструкция\n"
+        "3. Настройте оформление и контент по желанию\n"
+        "4. Запустите, если ещё не запущен\n\n"
+        "Управление — в «🤖 Мои боты»."
+    )
+    kb = ikb(
+        [btn("📋 Открыть карточку", f"b:{bot_id}:open")],
+        [btn("🚀 Первый запуск", f"setup:{bot_id}:{template}:ready")],
+        [btn("⬅️ К списку ботов", "mybots")],
+    )
+    await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     await cb.answer()
