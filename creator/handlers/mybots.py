@@ -63,7 +63,7 @@ def card_text(ctx: Ctx, b) -> str:
         tools.append("команды")
     elif b["template"] == "starbot":
         tools.append("треки")
-    if b["template"] in {"clicker", "refbot"}:
+    if b["template"] in {"clicker", "refbot", "microtasks"}:
         tools.append("LavePay")
     lines.append(f"Инструменты: {', '.join(tools)}")
     if ctx.tgrass is not None:

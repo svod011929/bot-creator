@@ -13,7 +13,7 @@ from typing import Any
 
 from child.files import read_config
 
-PAYOUT_TEMPLATES = frozenset({"clicker", "refbot"})
+PAYOUT_TEMPLATES = frozenset({"clicker", "refbot", "microtasks"})
 METHODS = ("card", "sbp", "usdt_trc20")
 JOB_AWAITING = "awaiting_approval"
 JOB_QUEUED = "queued"

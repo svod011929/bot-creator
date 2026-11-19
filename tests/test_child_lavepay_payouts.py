@@ -480,6 +480,9 @@ def test_starbot_has_no_lavepay_settings_or_card_button():
     kb2 = bot_card_kb({"id": 2, "template": "refbot", "desired": 1, "status": "running", "sale_price": None}, False)
     texts2 = [b.text for row in kb2.inline_keyboard for b in row]
     assert "💳 LavePay выплаты" in texts2
+    kb3 = bot_card_kb({"id": 3, "template": "microtasks", "desired": 1, "status": "running", "sale_price": None}, False)
+    texts3 = [b.text for row in kb3.inline_keyboard for b in row]
+    assert "💳 LavePay выплаты" in texts3
 
 
 @pytest.mark.asyncio
@@ -537,3 +540,42 @@ async def test_buy_bot_drops_previous_owner_shop(tmp_path):
     assert ctx.db.bot(7)["owner_id"] == 200
     payouts.close()
     ctx.db.close()
+
+
+@pytest.mark.asyncio
+async def test_owner_payout_instructions_hide_signup_link(env):
+    from aiogram.methods import EditMessageText, SendMessage
+
+    from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
+    from tests.test_creator_flow import OWNER, create_paid_bot
+
+    def hidden(text: str, *labels: str) -> None:
+        assert text
+        for label in labels:
+            assert f'<a href="{LAVEPAY_SIGNUP_URL}">{label}</a>' in text
+        assert LAVEPAY_SIGNUP_URL not in text.replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+
+    ctx, feed, session = env
+    ctx.cfg.child_lavepay_payouts = True
+    ctx.cfg.owner_payout_key = FERNET
+    await feed(msg_update(OWNER, "/start"))
+    bot_id = await create_paid_bot(ctx, feed, session)
+    session.requests.clear()
+    await feed(cb_update(OWNER, f"olp:{bot_id}"))
+    card = [m for m in session.requests if isinstance(m, (SendMessage, EditMessageText))
+            and "LavePay выплаты" in (m.text or "")][-1]
+    hidden(card.text, "LavePay", "Laveshka")
+    assert card.disable_web_page_preview is True
+    session.requests.clear()
+    await feed(cb_update(OWNER, f"olp:{bot_id}:key"))
+    prompt = session.of(SendMessage)[-1]
+    hidden(prompt.text, "Laveshka", "зарегистрируйтесь")
+    assert prompt.disable_web_page_preview is True
+
+
+def test_bots_default_parse_mode_is_html():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("creator/__main__.py", "child/__main__.py", "child/worker.py"):
+        text = (root / rel).read_text()
+        assert "DefaultBotProperties(parse_mode=ParseMode.HTML)" in text

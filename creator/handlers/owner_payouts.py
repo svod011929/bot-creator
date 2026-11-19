@@ -13,6 +13,7 @@ from child.db import fmt
 from child.payouts import loads_destination, public_details
 from creator.keyboards import btn, cancel_kb, ikb
 from creator.lavepay import LavePayError
+from creator.lavepay_signup import lavepay_signup_link
 from creator.owner_payouts import child_flags, disconnect_shop, look_key, refresh_shop, save_shop, set_rate
 from creator.services import Ctx
 from creator.states import OwnerPayout
@@ -20,7 +21,7 @@ from creator.states import OwnerPayout
 router = Router(name="owner_payouts")
 log = logging.getLogger("owner_payouts.ui")
 
-TEMPLATES = frozenset({"clicker", "refbot"})
+TEMPLATES = frozenset({"clicker", "refbot", "microtasks"})
 
 
 def _owned(ctx: Ctx, uid: int, bot_id: int):
@@ -36,8 +37,8 @@ def shop_text(ctx: Ctx, b) -> tuple[str, object]:
     lines = [
         f"💳 <b>LavePay выплаты</b> для бота ID {b['id']} (@{html.escape(b['username'] or '—')})",
         "",
-        "Пользователи кликера и реф-бота могут выводить USDT в сети TRC-20. "
-        "Деньги списываются с вашего магазина LavePay и только после вашего подтверждения курса.",
+        "Пользователи этого бота могут выводить USDT в сети TRC-20. "
+        f"Деньги списываются с вашего магазина {lavepay_signup_link('LavePay')} и только после вашего подтверждения курса.",
     ]
     if shop:
         lines += [
@@ -45,13 +46,22 @@ def shop_text(ctx: Ctx, b) -> tuple[str, object]:
             f"Магазин: {html.escape(str(shop.get('merchant_name') or '—'))}"
             + (f" (№{shop['merchant_id']})" if shop.get("merchant_id") else ""),
             f"Статус: {html.escape(str(shop.get('status') or '—'))}",
-            f"Выплаты по API: {'включены' if shop.get('payouts_enabled') else 'выключены — включите в приложении Laveshka'}",
+            (
+                "Выплаты по API: включены"
+                if shop.get("payouts_enabled")
+                else "Выплаты по API: выключены — включите в приложении "
+                + lavepay_signup_link("Laveshka")
+            ),
             f"Баланс USDT: {html.escape(str(shop.get('usdt_balance') or '0'))}",
         ]
         if not shop.get("payouts_enabled") or shop.get("status") != "active":
             lines.append("Пока выплаты в магазине не включены, заявки идут как раньше — вручную.")
     else:
-        lines += ["", "Магазин ещё не подключён. Заявки на вывод пока обрабатываются вручную."]
+        lines += [
+            "",
+            "Магазин ещё не подключён. Заявки на вывод пока обрабатываются вручную. "
+            f"Ключ берётся в мини-приложении {lavepay_signup_link('Laveshka')}.",
+        ]
     kind, rate = flags.get("lavepay_unit_kind"), flags.get("lavepay_unit_rate")
     if kind == "rub" and rate == "1":
         lines.append("Сумма в рублях будет пересчитана в USDT по курсу LavePay в момент подтверждения.")
@@ -244,9 +254,12 @@ async def owner_lavepay(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         await cb.message.answer(
             "Пришлите API-ключ магазина Lave Pay одним сообщением. "
             "Сообщение будет удалено, ключ в чат не вернётся.\n"
-            "Ключ выпускается в мини-приложении Laveshka: Сервисы → Для бизнеса → Lave Pay.\n"
+            f"Ключ выпускается в мини-приложении {lavepay_signup_link('Laveshka')}: "
+            "Сервисы → Для бизнеса → Lave Pay.\n"
+            f"Если аккаунта ещё нет, {lavepay_signup_link('зарегистрируйтесь')} и откройте тот же раздел.\n"
             "Включите там «Выплаты по API». /cancel — отмена.",
             reply_markup=cancel_kb(f"olp:{bot_id}"),
+            disable_web_page_preview=True,
         )
         await cb.answer()
         return
@@ -400,7 +413,10 @@ async def take_rate(message: Message, state: FSMContext, ctx: Ctx) -> None:
     # Rate can be saved even before a shop is connected; create a placeholder? No, need a shop row.
     # If no shop, tell owner to connect first, but keep the rate input if shop exists.
     if not ctx.db.owner_lavepay_shop(b["id"]):
-        await message.answer("Сначала подключите магазин LavePay, затем задайте курс.")
+        await message.answer(
+            f"Сначала подключите магазин {lavepay_signup_link('LavePay')}, затем задайте курс.",
+            disable_web_page_preview=True,
+        )
         return
     try:
         ok = set_rate(ctx.cfg, ctx.db, b["id"], message.from_user.id, parts[0], parts[1])

@@ -73,7 +73,7 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
     ]
     if b["template"] in {"refbot", "starbot", "clicker"}:
         rows.append([btn("📚 Контент", callback(b, "home"))])
-    if b["template"] in {"clicker", "refbot"}:
+    if b["template"] in {"clicker", "refbot", "microtasks"}:
         rows.append([btn("💳 LavePay выплаты", f"olp:{i}")])
     rows.append([
         btn("⚙️ Настройки", f"b:{i}:set"),

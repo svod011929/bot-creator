@@ -15,6 +15,7 @@ TEXT_FIELDS = {
     "clicker": ("welcome", "adventure_title", "adventure_intro"),
     "refbot": ("welcome", "club_title", "club_intro", "about"),
     "starbot": ("welcome", "sky_title", "sky_intro"),
+    "microtasks": ("welcome",),
 }
 TITLES = {"clicker": "adventure_title", "refbot": "club_title", "starbot": "sky_title"}
 LABELS = {

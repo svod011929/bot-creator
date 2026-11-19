@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from child import templates
 from creator.keyboards import btn, cancel_kb, ikb, url_btn
 from creator.lavepay import MAX_TOPUP_RUB, MIN_TOPUP_RUB, LavePayError
+from creator.lavepay_signup import lavepay_signup_link
 from creator.money import rub
 from creator.services import Ctx
 from creator.states import Cabinet
@@ -78,11 +79,13 @@ async def send_lave_invoice(target: Message, ctx: Ctx, uid: int, payload: str, d
     await target.bot.send_message(
         uid,
         f"🧾 <b>Счёт LavePay</b>\n\n{html.escape(description)}\n"
-        f"💰 К оплате: <b>{rub(row['amount'])}</b> (выставлено ${row['usd']}; оплата балансом Laveshka, "
+        f"💰 К оплате: <b>{rub(row['amount'])}</b> (выставлено ${row['usd']}; "
+        f"оплата балансом {lavepay_signup_link('Laveshka')}, "
         "USDT/криптой, CryptoBot или xRocket)\n\n"
-        "Нажмите «Оплатить» — откроется Laveshka. Счёт действует 1 час. "
+        f"Нажмите «Оплатить» — откроется {lavepay_signup_link('Laveshka')}. Счёт действует 1 час. "
         "Зачисление автоматическое; если не пришло — «🔄 Проверить оплату».",
         reply_markup=invoice_kb(row),
+        disable_web_page_preview=True,
     )
     return None
 
@@ -141,9 +144,12 @@ async def lave_topup_menu(cb: CallbackQuery, ctx: Ctx) -> None:
             [btn(f"{r} ₽", f"lp:t:{r}") for r in RUB_TOPUP_OPTIONS[3:]],
             [btn("✏️ Другая сумма", "cab:lavecustom")], [btn("⬅️ Назад", "cab:main")]]
     await cb.message.edit_text(
-        "➕ <b>Пополнение баланса</b>\n\nОплата через LavePay (балансом Laveshka, USDT/криптой, CryptoBot "
-        "или xRocket). Выберите сумму в рублях:",
-        reply_markup=ikb(*rows))
+        "➕ <b>Пополнение баланса</b>\n\n"
+        f"Оплата через {lavepay_signup_link('LavePay')} (балансом {lavepay_signup_link('Laveshka')}, "
+        "USDT/криптой, CryptoBot или xRocket). Выберите сумму в рублях:",
+        reply_markup=ikb(*rows),
+        disable_web_page_preview=True,
+    )
     await cb.answer()
 
 
