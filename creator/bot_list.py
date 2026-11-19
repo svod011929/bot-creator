@@ -116,10 +116,13 @@ def render(ctx, uid: int, view: View):
         label = f"ID {row['id']} · {users_s} 👤 | {title} {STATUS_ICON.get(row['status'], '⚪')}"
         buttons.append([btn(label, f"b:{row['id']}:open")])
     if not rows:
-        lines.append("Боты не найдены.")
         if not view.query and view.status == "all":
-            lines.append("Нажмите «🔨 Создать бота», чтобы создать первого.")
-            buttons.append([btn("🔨 Создать бота", "create")])
+            lines.append("У вас пока нет ботов.")
+            lines.append("Нажмите кнопку ниже или «🔨 Создать бота» в меню, чтобы создать первого.")
+            buttons.append([btn("🔨 Создать первого бота", "create")])
+        else:
+            lines.append("Боты по этому фильтру или поиску не найдены.")
+            lines.append("Попробуйте сбросить фильтр или изменить поиск.")
     nav = []
     if view.page:
         nav.append(btn("⬅️ Предыдущая", data(view, f"p:{view.page - 1}")))

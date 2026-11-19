@@ -125,7 +125,7 @@ async def test_dispatcher_page_search_filter_and_card_return(listing):
     assert await w.state.get_state() is None
     assert "(1)" in last(w) and "Поиск: включён" in last(w)
     await w.feed(cb_update(OWNER, callback(w, ":f:stopped")))
-    assert "Боты не найдены" in last(w)
+    assert "У вас пока нет ботов." in last(w) or "Боты по этому фильтру" in last(w)
     await w.feed(cb_update(OWNER, callback(w, ":reset")))
     assert "(21)" in last(w) and "Поиск: выключен" in last(w)
 
@@ -221,7 +221,7 @@ async def test_empty_and_page_boundaries_after_concurrent_removals(listing):
         assert view.page == max(0, (count - 1) // 10)
         text, _, _ = render(w.ctx, OWNER, view)
         if count == 0:
-            assert "Боты не найдены" in text and "Страница 1 из 1" in text
+            assert ("У вас пока нет ботов." in text or "Боты по этому фильтру" in text) and "Страница 1 из 1" in text
 
 
 async def test_unknown_metadata_never_echoes_unsafe_values(listing):

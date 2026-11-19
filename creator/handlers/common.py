@@ -14,13 +14,15 @@ from creator.services import Ctx
 router = Router(name="common")
 
 WELCOME = (
-    "<b>Добро пожаловать в конструктор ботов!</b>\n\n"
-    "Создайте Telegram-бота из готового шаблона без программирования. "
-    "Мы размещаем бота на своём сервере, вы управляете его настройками.\n\n"
-    "Впервые здесь? Нажмите «Создать бота» — сравните шаблоны, стоимость и условия хостинга.\n"
-    "Уже есть бот? Откройте «Мои боты».\n"
-    "Нужна помощь? «Информация» → «❓ Помощь».\n\n"
-    "Кабинет, партнёры и перепродажа — в меню ниже."
+    "<b>👋 Добро пожаловать в конструктор ботов!</b>\n\n"
+    "Создавайте и управляйте Telegram-ботами из готовых шаблонов — без программирования. "
+    "Мы хостим бота, вы настраиваете контент, оформление и выплаты.\n\n"
+    "🚀 <b>Начните здесь:</b>\n"
+    "• «🔨 Создать бота» — выберите шаблон и пришлите токен от @BotFather\n"
+    "• «🤖 Мои боты» — управление уже созданными\n"
+    "• «💼 Мой кабинет» — баланс, пополнение, история\n\n"
+    "❓ Нужна помощь? Отправьте /help или откройте «📰 Информация» → «❓ Помощь».\n\n"
+    "Кабинет, партнёры и перепродажа — кнопками меню ниже."
 )
 
 
@@ -114,7 +116,7 @@ async def cancel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(cb.from_user.id, None)
     ctx.source_inputs.pop(cb.from_user.id, None)
-    await cb.message.edit_text("❌ Отменено.")
+    await cb.message.edit_text("❌ Отменено. Можете начать заново или открыть меню.")
     await cb.answer()
 
 
@@ -123,4 +125,11 @@ async def cancel_cmd(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(message.from_user.id, None)
     ctx.source_inputs.pop(message.from_user.id, None)
-    await message.answer("❌ Отменено.", reply_markup=main_kb(ctx.is_admin(message.from_user.id)))
+    await message.answer("❌ Отменено. Можете начать заново или открыть меню.",
+                      reply_markup=main_kb(ctx.is_admin(message.from_user.id)))
+
+
+@router.message(F.text == "/help")
+async def help_cmd(message: Message, ctx: Ctx) -> None:
+    from creator.handlers.info import help_text
+    await message.answer(help_text(ctx), reply_markup=main_kb(ctx.is_admin(message.from_user.id)), disable_web_page_preview=True)

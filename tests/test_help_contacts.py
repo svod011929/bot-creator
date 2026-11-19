@@ -37,14 +37,14 @@ async def test_help_screen_with_links(env):  # noqa: F811
     ctx, feed, session = env
     ctx.cfg.chat_url, ctx.cfg.channel_url, ctx.cfg.admin_url = CHAT, CHANNEL, "https://t.me/DDDDEVELOPER"
     await feed(msg_update(OWNER, "/start"))
-    assert "«Информация» → «❓ Помощь»" in session.of(SendMessage)[-1].text
+    assert "«📰 Информация» → «❓ Помощь»" in session.of(SendMessage)[-1].text
     await feed(msg_update(OWNER, "📰 Информация"))
     assert ("❓ Помощь", "info:help") in kb(session.of(SendMessage)[-1])
     before = len(session.requests)
     await feed(cb_update(OWNER, "info:help"))
     screen = session.of(EditMessageText)[-1]
     from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
-    for part in ("Запуск", "Хостинг", "Токен", "Выплаты в ваших ботах", "/cancel", "бота заданий"):
+    for part in ("Как создать бота", "Хостинг", "Токен", "Выплаты пользователям", "/cancel", "заданий"):
         assert part in screen.text
     assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in screen.text
     assert LAVEPAY_SIGNUP_URL not in screen.text.replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
@@ -81,3 +81,28 @@ async def test_admin_unaffected(env):  # noqa: F811
     await feed(cb_update(ADMIN, "info:help"))
     assert "Помощь" in session.of(EditMessageText)[-1].text
     assert isinstance(Config, type)
+
+
+@pytest.mark.asyncio
+async def test_help_command_and_card_tips(env):  # noqa: F811
+    from aiogram.methods import EditMessageText, SendMessage
+
+    from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
+    from tests.test_creator_flow import OWNER, create_paid_bot
+
+    ctx, feed, session = env
+    await feed(msg_update(OWNER, "/start"))
+    bot_id = await create_paid_bot(ctx, feed, session)
+    session.requests.clear()
+    await feed(msg_update(OWNER, "/help"))
+    help_msg = session.of(SendMessage)[-1]
+    assert "Как создать бота" in (help_msg.text or "")
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (help_msg.text or "")
+    assert help_msg.disable_web_page_preview is True
+    session.requests.clear()
+    await feed(cb_update(OWNER, f"b:{bot_id}:tips"))
+    tips = [m for m in session.requests if isinstance(m, (SendMessage, EditMessageText))
+            and "Подсказки по карточке" in (m.text or "")][-1]
+    assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (tips.text or "")
+    assert LAVEPAY_SIGNUP_URL not in (tips.text or "").replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+    assert tips.disable_web_page_preview is True
