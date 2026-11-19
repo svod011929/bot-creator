@@ -22,8 +22,8 @@ MAX_JSON = 256 * 1024
 TOKEN_LIKE = re.compile(r"\b[0-9]{5,15}:[A-Za-z0-9_-]{20,}")
 USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{4,31}", re.ASCII)
 DISCLAIMER = (
-    "Это сведения конфигурации и процесса, не проверка ответа Telegram. "
-    "Приветствие и единицу можно оставить по умолчанию. Собственный канал необязателен."
+    "Это обзор состояния и настроек. Приветствие и единицу баланса можно оставить по умолчанию. "
+    "Собственный канал необязателен."
 )
 
 
@@ -155,15 +155,25 @@ def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, Inlin
         rows.append([btn("⬅️ Все настройки", callback(row, "settings"))])
     else:
         if action == "ready":
+            from creator.lavepay_signup import lavepay_signup_link
             process = "запущен" if ctx.sup.is_running(row["id"]) else "не запущен"
             status = {"running": "запущен", "stopped": "остановлен", "restarting": "перезапускается",
                       "error": "ошибка"}.get(row["status"], "неизвестно")
-            lines.extend((f"Процесс: {process} (по супервизору)", f"Запись состояния: {status}",
-                          "Конфигурация: " + ("соответствует записи" if snap.config_ok else "недоступна или не подтверждена")))
+            lines.extend((
+                "",
+                "<b>Чек-лист первого запуска</b>",
+                f"1. Процесс: {process}",
+                f"2. Состояние: {status}",
+                "3. Конфигурация: " + ("в порядке" if snap.config_ok else "требует внимания"),
+                "4. Ссылка на бота: " + ("доступна" if bot_url(row) else "пока недоступна"),
+                "",
+                "Дальше: настройте приветствие и оформление, при необходимости "
+                f"подключите выплаты {lavepay_signup_link('LavePay')}, "
+                "затем откройте бота и проверьте.",
+            ))
             url = bot_url(row)
-            lines.append("Ссылка: " + ("доступна" if url else "недоступна"))
             if url:
-                rows.append([url_btn("Открыть бота", url)])
+                rows.append([url_btn("🚀 Открыть бота", url)])
         if snap.values is None:
             lines.append("Сохранённые настройки недоступны или не подтверждены.")
         for key, label in (("welcome", "Приветствие"), ("currency", "Единица баланса")):
