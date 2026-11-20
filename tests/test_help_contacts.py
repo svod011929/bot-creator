@@ -1,4 +1,6 @@
 """B4: help screen and validated support links; nothing is sent, nothing is stored."""
+from pathlib import Path
+
 import pytest
 from aiogram.methods import EditMessageText, SendMessage
 
@@ -40,6 +42,7 @@ async def test_help_screen_with_links(env):  # noqa: F811
     assert "«📰 Информация» → «❓ Помощь»" in session.of(SendMessage)[-1].text
     await feed(msg_update(OWNER, "📰 Информация"))
     assert ("❓ Помощь", "info:help") in kb(session.of(SendMessage)[-1])
+    assert ("📄 Документы", "info:docs") in kb(session.of(SendMessage)[-1])
     before = len(session.requests)
     await feed(cb_update(OWNER, "info:help"))
     screen = session.of(EditMessageText)[-1]
@@ -106,3 +109,58 @@ async def test_help_command_and_card_tips(env):  # noqa: F811
     assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (tips.text or "")
     assert LAVEPAY_SIGNUP_URL not in (tips.text or "").replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
     assert tips.disable_web_page_preview is True
+
+
+def test_legal_pdf_files_present():
+    from creator.lavepay_signup import LAVEPAY_SIGNUP_URL
+    from creator.legal import DOCS, FILES
+
+    assert set(FILES) == set(DOCS) == {"agreement", "privacy", "offer"}
+    for path in FILES.values():
+        assert path.is_file()
+        assert path.read_bytes()[:5] == b"%PDF-"
+    for _title, body in DOCS.values():
+        assert LAVEPAY_SIGNUP_URL not in body
+
+
+@pytest.mark.asyncio
+async def test_documents_menu_and_pdf(env):  # noqa: F811
+    from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendDocument, SendMessage
+
+    from creator.legal import FILES
+
+    ctx, feed, session = env
+    await feed(msg_update(OWNER, "/start"))
+    await feed(msg_update(OWNER, "📰 Информация"))
+    assert ("📄 Документы", "info:docs") in kb(session.of(SendMessage)[-1])
+
+    await feed(cb_update(OWNER, "info:docs"))
+    menu = session.of(EditMessageText)[-1]
+    assert "Документы" in (menu.text or "")
+    labels = kb(menu)
+    assert ("📜 Пользовательское соглашение", "info:doc:agreement") in labels
+    assert ("🔒 Политика конфиденциальности", "info:doc:privacy") in labels
+    assert ("📋 Публичная оферта", "info:doc:offer") in labels
+
+    await feed(cb_update(OWNER, "info:doc:agreement"))
+    doc = session.of(EditMessageText)[-1]
+    assert "Пользовательское соглашение" in (doc.text or "")
+    assert "1. Общие положения" in (doc.text or "")
+    assert ("📥 Скачать полную версию (PDF)", "info:pdf:agreement") in kb(doc)
+
+    session.requests.clear()
+    await feed(cb_update(OWNER, "info:pdf:agreement"))
+    sent = session.of(SendDocument)[-1]
+    path = getattr(sent.document, "path", None)
+    assert path is not None and Path(path).resolve() == FILES["agreement"].resolve()
+    assert "Пользовательское соглашение" in (sent.caption or "")
+
+    session.requests.clear()
+    await feed(cb_update(OWNER, "info:doc:missing"))
+    alerts = [a for a in session.of(AnswerCallbackQuery) if a.text]
+    assert any(a.text == "Документ не найден" and a.show_alert for a in alerts)
+
+    session.requests.clear()
+    await feed(cb_update(OWNER, "info:pdf:missing"))
+    alerts = [a for a in session.of(AnswerCallbackQuery) if a.text]
+    assert any(a.text == "Файл временно недоступен" and a.show_alert for a in alerts)
