@@ -8,11 +8,12 @@ from datetime import date
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from creator.config import support_url
 from creator.keyboards import BTN_INFO, btn, cancel_kb, ikb, url_btn
 from creator.lavepay_signup import lavepay_signup_link
+from creator.legal import DOCS, FILES
 from creator.services import Ctx
 from creator.states import Info
 
@@ -84,7 +85,13 @@ def contact_buttons(ctx: Ctx) -> tuple[list, str]:
 def info_kb(ctx: Ctx):
     links, admin_url = contact_buttons(ctx)
     admin = url_btn("👑 Администратор", admin_url) if admin_url else btn("👑 Администратор", "info:admin")
-    return ikb(links, [btn("❓ Помощь", "info:help")], [btn("⛔ Оповестить о проблеме", "info:report")], [admin])
+    return ikb(
+        links,
+        [btn("❓ Помощь", "info:help")],
+        [btn("📄 Документы", "info:docs")],
+        [btn("⛔ Оповестить о проблеме", "info:report")],
+        [admin],
+    )
 
 
 def help_kb(ctx: Ctx):
@@ -130,6 +137,53 @@ async def info_back(cb: CallbackQuery, ctx: Ctx) -> None:
 @router.callback_query(F.data == "info:admin")
 async def admin_contact(cb: CallbackQuery) -> None:
     await cb.answer("Напишите через «Оповестить о проблеме» — сообщение придёт администратору.", show_alert=True)
+
+
+
+@router.callback_query(F.data == "info:docs")
+async def docs_menu(cb: CallbackQuery) -> None:
+    await cb.answer()
+    text = (
+        "📄 <b>Документы</b>\n\n"
+        "Ознакомьтесь с условиями использования сервиса."
+    )
+    kb = ikb(
+        [btn("📜 Пользовательское соглашение", "info:doc:agreement")],
+        [btn("🔒 Политика конфиденциальности", "info:doc:privacy")],
+        [btn("📋 Публичная оферта", "info:doc:offer")],
+        [btn("⬅️ Назад", "info:back")],
+    )
+    await _show(cb, text, kb)
+
+
+@router.callback_query(F.data.startswith("info:doc:"))
+async def show_doc(cb: CallbackQuery) -> None:
+    key = cb.data.split(":", 2)[2]
+    if key not in DOCS:
+        await cb.answer("Документ не найден", show_alert=True)
+        return
+    _title, body = DOCS[key]
+    await cb.answer()
+    rows = []
+    if key in FILES and FILES[key].is_file():
+        rows.append([btn("📥 Скачать полную версию (PDF)", f"info:pdf:{key}")])
+    rows.append([btn("⬅️ К документам", "info:docs")])
+    await _show(cb, body, ikb(*rows))
+
+
+@router.callback_query(F.data.startswith("info:pdf:"))
+async def send_pdf(cb: CallbackQuery) -> None:
+    key = cb.data.split(":", 2)[2]
+    path = FILES.get(key)
+    if not path or not path.is_file():
+        await cb.answer("Файл временно недоступен", show_alert=True)
+        return
+    await cb.answer()
+    caption = DOCS[key][0]
+    try:
+        await cb.message.answer_document(FSInputFile(path), caption=caption)
+    except Exception:
+        await cb.message.answer("Не удалось отправить файл. Попробуйте позже.")
 
 
 @router.callback_query(F.data == "info:report")
