@@ -108,6 +108,7 @@ async def test_help_command_and_card_tips(env):  # noqa: F811
             and "Подсказки по карточке" in (m.text or "")][-1]
     assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (tips.text or "")
     assert LAVEPAY_SIGNUP_URL not in (tips.text or "").replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
+    assert "Заработок на рассылках" in (tips.text or "")
     assert tips.disable_web_page_preview is True
 
 

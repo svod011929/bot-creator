@@ -130,6 +130,14 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     day = ctx.price("HOSTING_DAY_PRICE")
     await state.clear()
 
+    if action in {"mgram", "mgram_reg"}:
+        from creator.handlers.mgram import mgram_register, mgram_screen
+        if action == "mgram_reg":
+            await mgram_register(cb, ctx)
+        else:
+            await mgram_screen(cb, ctx)
+        return
+
     if action == "wh":
         from creator.handlers.webhooks import show_owner
         await show_owner(cb, ctx, b)
@@ -147,6 +155,7 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
             "📈 Активность — инструменты вовлечения.\n"
             "📚 Контент — карточки, кампании, треки (если доступно).\n"
             f"💳 {lavepay_signup_link('LavePay')} выплаты — подключение своего магазина для выплат.\n"
+            "📢 Заработок на рассылках — монетизация аудитории (от 50 пользователей).\n"
             "⚙️ Настройки — единицы баланса, награды и параметры шаблона.\n"
             "🛒 Продать / 🚫 С продажи — выставить бота на перепродажу.\n"
             "🔁 Передать — отдать бота другому пользователю конструктора.\n"

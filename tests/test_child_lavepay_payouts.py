@@ -177,6 +177,7 @@ def test_child_env_has_no_lave_secrets():
     assert "LAVEPAY_API_KEY" not in CHILD_ENV_KEYS
     assert "OWNER_PAYOUT_KEY" not in CHILD_ENV_KEYS
     assert "LAVEPAY_WEBHOOK_SECRET" not in CHILD_ENV_KEYS
+    assert "MGRAM_PARTNER_API_KEY" not in CHILD_ENV_KEYS
 
 
 def test_look_key_shape():
