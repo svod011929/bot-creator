@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery
 
 from creator.keyboards import btn, ikb
 from creator.services import Ctx
+from creator.unsubscribe_webhooks import PF_PASTE, TG_PASTE
 
 
 def _lines(ctx: Ctx, bot_id: int) -> str | None:
@@ -22,11 +23,11 @@ def _lines(ctx: Ctx, bot_id: int) -> str | None:
     pf = ctx.db.pf(bot_id)
     if tg:
         url = html.escape(service.url(bot_id, "tgrass"))
-        parts.append("TGrass — Настройки бота → Webhook → <b>отписка</b>:\n"
+        parts.append(f"{TG_PASTE}\n"
                      f"<code>{url}</code>\n")
     if pf:
         url = html.escape(service.url(bot_id, "piarflow"))
-        parts.append("PiarFlow — кабинет → Webhook / API:\n"
+        parts.append(f"{PF_PASTE}\n"
                      f"<code>{url}</code>\n")
     if not tg and not pf:
         parts.append("Сети ещё не подключены к этому боту — адрес появится после одобрения заявки.")
@@ -50,5 +51,24 @@ async def show_admin(cb: CallbackQuery, ctx: Ctx, bot_id: int) -> None:
         await cb.answer("Не найден", show_alert=True)
         return
     await cb.message.edit_text(text, reply_markup=ikb([btn("⬅️ К боту", f"a:bot:{bot_id}")]),
+                               disable_web_page_preview=True)
+    await cb.answer()
+
+async def show_hub(cb: CallbackQuery, ctx: Ctx) -> None:
+    if not getattr(ctx, "unsub", None):
+        await cb.answer("Недоступно", show_alert=True)
+        return
+    service = ctx.unsub
+    text = (
+        "🔗 <b>Вебхуки трансляции спонсоров</b> (@DDDCReatorBot / хаб)\n\n"
+        "Эти адреса — для режима трансляции (общий ключ источника креатора). "
+        "Вставьте их в кабинете хаб-бота сетей. Владельцам дочерних ботов их не отправляйте.\n\n"
+        f"{TG_PASTE}\n<code>{html.escape(service.hub_url('tgrass'))}</code>\n\n"
+        f"{PF_PASTE}\n<code>{html.escape(service.hub_url('piarflow'))}</code>\n\n"
+        "Штраф за отписку равен начисленной награде и действует после того, "
+        "как адрес установлен.\n\n"
+        "Никому не пересылайте эти ссылки: кто их знает, сможет слать ложные отписки."
+    )
+    await cb.message.edit_text(text, reply_markup=ikb([btn("⬅️ В админ-панель", "a:main")]),
                                disable_web_page_preview=True)
     await cb.answer()

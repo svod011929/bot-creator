@@ -42,9 +42,13 @@ def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
         row.append(btn("💸 TGrass", "a:tg"))
     if ctx is not None and ctx.piarflow is not None:
         row.append(btn("🚀 PiarFlow", "a:pf"))
+    extra = []
+    if ctx is not None and getattr(ctx, "unsub", None):
+        extra.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
     return ikb([btn("📊 Статистика", "a:stats"), btn("💰 Цены", "a:prices")],
                [btn("📢 Рассылка", "a:bc"), btn("👤 Пользователи", "a:users")],
                row, [btn("🔎 Найти бота", "a:botfind")], [btn("📡 Источники ОП", "src:home")],
+               *extra,
                *([[btn("💸 Заявки на вывод", "a:wd:0")]] if ctx is not None and uid is not None
                  and uid == ctx.cfg.approver else []))
 
@@ -340,6 +344,12 @@ def bot_view(ctx: Ctx, bot_id: int, action: str):
     rows.append([btn("⬅️ Боты", "a:bots")])
     kb = ikb(*rows)
     return text, kb
+
+
+@router.callback_query(F.data == "a:whhub")
+async def webhook_hub(cb: CallbackQuery, ctx: Ctx) -> None:
+    from creator.handlers.webhooks import show_hub
+    await show_hub(cb, ctx)
 
 
 @router.callback_query(F.data.startswith("a:wh:"))

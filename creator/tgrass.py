@@ -226,6 +226,7 @@ class TGrassService:
             self.db.tgrass_set(bot_id, status="approved", mode=mode, api_key=key, error=None,
                                decided_at=now(), decided_by=admin_id)
             await self.ctx.apply_changes(bot_id)
+            await self._notice_webhook_urls(bot_id)
             log.info("bot %s снова включён в TGrass mode=%s (админ %s)", bot_id, mode, admin_id)
             return
 
@@ -256,8 +257,13 @@ class TGrassService:
             fields["error"] = "factory→relay: ошибка регистрации"
         self.db.tgrass_set(bot_id, **fields)
         await self.ctx.apply_changes(bot_id)
+        await self._notice_webhook_urls(bot_id)
         log.info("bot %s подключён к TGrass mode=%s%s (админ %s)",
                  bot_id, mode, " (fallback)" if fell_back else "", admin_id)
+
+    async def _notice_webhook_urls(self, bot_id: int) -> None:
+        from creator.unsubscribe_webhooks import hook_after_approve
+        await hook_after_approve(self.ctx, bot_id, "tgrass")
 
     async def reject(self, bot_id: int, admin_id: int) -> bool:
         t = self.db.tgrass(bot_id)
