@@ -12,6 +12,7 @@ from child import templates
 from child.files import dir_size, human_size, write_setting
 from creator.db import InsufficientFunds
 from creator.keyboards import BTN_MY, STATUS_TEXT, bot_card_kb, btn, cancel_kb, ikb
+from creator.lavepay_signup import lavepay_signup_link
 from creator.money import parse_rub, rub
 from creator.services import Ctx
 from creator.states import BotEdit
@@ -132,6 +133,28 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     if action == "wh":
         from creator.handlers.webhooks import show_owner
         await show_owner(cb, ctx, b)
+        return
+
+    if action == "tips":
+        tips = (
+            "💡 <b>Подсказки по карточке бота</b>\n\n"
+            "▶️ / ⏹ / 🔄 — управление запуском.\n"
+            "📊 Статистика — пользователи и активность.\n"
+            "📋 Первый запуск — краткая инструкция после создания.\n"
+            "💳 Хостинг — пополнение дней работы бота.\n"
+            "👑 VIP — дополнительные возможности.\n"
+            "🎨 Оформление — приветствие, сценарий и тексты.\n"
+            "📈 Активность — инструменты вовлечения.\n"
+            "📚 Контент — карточки, кампании, треки (если доступно).\n"
+            f"💳 {lavepay_signup_link('LavePay')} выплаты — подключение своего магазина для выплат.\n"
+            "⚙️ Настройки — единицы баланса, награды и параметры шаблона.\n"
+            "🛒 Продать / 🚫 С продажи — выставить бота на перепродажу.\n"
+            "🔁 Передать — отдать бота другому пользователю конструктора.\n"
+            "🗑 Удалить — безвозвратное удаление (осторожно!).\n\n"
+            "Все денежные операции и выплаты требуют вашего подтверждения."
+        )
+        await show(cb, tips, ikb([btn("⬅️ Назад к карточке", f"b:{bot_id}:open")]))
+        await cb.answer()
         return
 
     if action == "start":
