@@ -6,9 +6,11 @@ import time
 from datetime import date
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from creator.config import support_url
 from creator.keyboards import BTN_INFO, btn, cancel_kb, ikb, url_btn
 from creator.services import Ctx
 from creator.states import Info
@@ -42,19 +44,71 @@ def info_text(ctx: Ctx) -> str:
     )
 
 
+HELP = (
+    "❓ <b>Помощь</b>\n" + SEP + "\n"
+    "🚀 <b>Запуск.</b> «🔨 Создать бота» → выберите шаблон → пришлите токен от @BotFather. "
+    "Бот появится в «🤖 Мои боты»; в его карточке — «📋 Первый запуск».\n\n"
+    "💳 <b>Хостинг.</b> При платном тарифе оплачивается в рублях с баланса хостинга бота: карточка бота → «💳 Хостинг». "
+    "Когда баланс заканчивается, бот останавливается — пополните его и запустите снова.\n\n"
+    "🔑 <b>Токен.</b> Это ключ от бота: отправляйте его только конструктору. "
+    "Если токен перевыпущен в @BotFather, бот остановится с ошибкой «Неверный токен» — напишите нам.\n\n"
+    "💸 <b>Выплаты в ваших ботах.</b> Заявки ваших пользователей на вывод обрабатываете вы сами; "
+    "«Отметить выплаченной» — только отметка, конструктор деньги не переводит.\n\n"
+    "↩️ <b>Если запутались.</b> /cancel или любая кнопка меню отменяет текущий ввод."
+)
+
+
+def contact_buttons(ctx: Ctx) -> tuple[list, str]:
+    chat, channel, admin = (support_url(ctx.cfg.chat_url), support_url(ctx.cfg.channel_url),
+                            support_url(ctx.cfg.admin_url))
+    links = [url_btn(t, u) for t, u in (("💬 Чат", chat), ("📢 Канал", channel)) if u]
+    return links, admin
+
+
 def info_kb(ctx: Ctx):
-    links = []
-    if ctx.cfg.chat_url:
-        links.append(url_btn("💬 Чат", ctx.cfg.chat_url))
-    if ctx.cfg.channel_url:
-        links.append(url_btn("📢 Канал", ctx.cfg.channel_url))
-    admin = url_btn("👑 Администратор", ctx.cfg.admin_url) if ctx.cfg.admin_url else btn("👑 Администратор", "info:admin")
-    return ikb(links, [btn("⛔ Оповестить о проблеме", "info:report")], [admin])
+    links, admin_url = contact_buttons(ctx)
+    admin = url_btn("👑 Администратор", admin_url) if admin_url else btn("👑 Администратор", "info:admin")
+    return ikb(links, [btn("❓ Помощь", "info:help")], [btn("⛔ Оповестить о проблеме", "info:report")], [admin])
+
+
+def help_kb(ctx: Ctx):
+    links, admin_url = contact_buttons(ctx)
+    rows = [links] if links else []
+    if admin_url:
+        rows.append([url_btn("👑 Администратор", admin_url)])
+    rows += [[btn("⛔ Оповестить о проблеме", "info:report")], [btn("⬅️ Назад", "info:back")]]
+    return ikb(*rows)
+
+
+def help_text(ctx: Ctx) -> str:
+    links, admin_url = contact_buttons(ctx)
+    if links or admin_url:
+        return HELP + "\n\nСвязь — кнопками ниже. Описать проблему можно через «⛔ Оповестить о проблеме»."
+    return HELP + "\n\nСвязь с администратором — через «⛔ Оповестить о проблеме»."
 
 
 @router.message(F.text == BTN_INFO)
 async def info(message: Message, ctx: Ctx) -> None:
     await message.answer(info_text(ctx), reply_markup=info_kb(ctx))
+
+
+async def _show(cb: CallbackQuery, text: str, markup) -> None:
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except TelegramBadRequest:
+        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "info:help")
+async def help_screen(cb: CallbackQuery, ctx: Ctx) -> None:
+    await cb.answer()
+    await _show(cb, help_text(ctx), help_kb(ctx))
+
+
+@router.callback_query(F.data == "info:back")
+async def info_back(cb: CallbackQuery, ctx: Ctx) -> None:
+    await cb.answer()
+    await _show(cb, info_text(ctx), info_kb(ctx))
 
 
 @router.callback_query(F.data == "info:admin")
