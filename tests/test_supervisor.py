@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 
 import pytest
@@ -88,3 +89,119 @@ async def test_child_env_has_no_main_token(env, monkeypatch, tmp_path):
     assert await wait_for(lambda: out.exists() and out.read_text() != "")
     assert out.read_text() == "none"
     await sup.stop(bot_id)
+
+
+async def test_child_env_excludes_all_parent_secrets(env, monkeypatch, tmp_path):
+    cfg, db, bot_id = env
+    names = ("BOT_TOKEN", "ADMIN_IDS", "LAVEPAY_API_KEY", "LAVEPAY_WEBHOOK_SECRET", "TGRASS_FACTORY_TOKEN",
+             "PIARFLOW_TOKEN", "CUSTOM_PARENT_SECRET")
+    for name in names:
+        monkeypatch.setenv(name, "synthetic-parent-value")
+    out = tmp_path / "env-presence.txt"
+    code = f"import os; open({str(out)!r},'w').write(str([k for k in {names!r} if k in os.environ]))"
+    sup = Supervisor(db, cfg, cmd=[sys.executable, "-c", code])
+    try:
+        await sup.start(bot_id)
+        assert await wait_for(lambda: out.exists() and out.read_text() != "")
+        assert out.read_text() == "[]"
+    finally:
+        await sup.shutdown()
+
+
+async def test_competing_starts_spawn_one_process(env, monkeypatch):
+    cfg, db, bot_id = env
+    sup = Supervisor(db, cfg, cmd=SLEEPER)
+    spawned = []
+    original = sup._spawn
+
+    async def slow_spawn(bid):
+        await asyncio.sleep(0)
+        await original(bid)
+        spawned.append(sup.children[bid].proc)
+
+    monkeypatch.setattr(sup, "_spawn", slow_spawn)
+    try:
+        await asyncio.gather(*(sup.start(bot_id) for _ in range(3)))
+        assert len(spawned) == 1 and sup.is_running(bot_id)
+    finally:
+        await sup.shutdown()
+    assert all(p.returncode is not None for p in spawned)
+
+
+async def test_shutdown_during_spawn_leaves_no_process(env, monkeypatch):
+    cfg, db, bot_id = env
+    sup = Supervisor(db, cfg, cmd=SLEEPER)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = sup._spawn
+    spawned = []
+
+    async def slow_spawn(bid):
+        entered.set()
+        await release.wait()
+        await original(bid)
+        spawned.append(sup.children[bid].proc)
+
+    monkeypatch.setattr(sup, "_spawn", slow_spawn)
+    starting = asyncio.create_task(sup.start(bot_id))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    shutdown = asyncio.create_task(sup.shutdown())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(starting, shutdown)
+    assert len(spawned) == 1 and spawned[0].returncode is not None
+    assert not sup.is_running(bot_id) and db.bot(bot_id)["desired"] == 1
+
+
+async def test_recovery_start_does_not_override_stop(env):
+    cfg, db, bot_id = env
+    sup = Supervisor(db, cfg, cmd=SLEEPER)
+    await sup.stop(bot_id)
+    await sup.start(bot_id, require_desired=True)
+    await sup.restart(bot_id, require_desired=True)
+    assert not sup.is_running(bot_id) and db.bot(bot_id)["desired"] == 0
+
+
+async def test_child_env_forwards_runtime_proxy_and_excludes_secrets(env, monkeypatch, tmp_path):
+    cfg, db, bot_id = env
+    forwarded = {
+        "TZ": "Europe/Helsinki",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "ALL_PROXY": "http://127.0.0.1:9",
+        "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+        "CURL_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+    }
+    secrets = {
+        "BOT_TOKEN": "999:MAIN-SECRET",
+        "ADMIN_IDS": "1",
+        "LAVEPAY_API_KEY": "synthetic-lave-key",
+        "LAVEPAY_WEBHOOK_SECRET": "synthetic-webhook",
+        "TGRASS_FACTORY_TOKEN": "synthetic-tgrass",
+        "TGRASS_HUB_API_KEY": "synthetic-tgrass-hub",
+        "PIARFLOW_TOKEN": "synthetic-piarflow",
+        "PIARFLOW_HUB_API_KEY": "synthetic-piarflow-hub",
+        "CUSTOM_PARENT_SECRET": "synthetic-parent-value",
+    }
+    for name, value in {**forwarded, **secrets}.items():
+        monkeypatch.setenv(name, value)
+    out = tmp_path / "child-env.json"
+    code = (
+        "import json,os; "
+        f"open({str(out)!r},'w').write(json.dumps(dict(os.environ)))"
+    )
+    sup = Supervisor(db, cfg, cmd=[sys.executable, "-c", code])
+    try:
+        await sup.start(bot_id)
+        assert await wait_for(lambda: out.exists() and out.stat().st_size > 2)
+        env = json.loads(out.read_text())
+        for name, value in forwarded.items():
+            assert env.get(name) == value, name
+        assert env.get("PYTHONUNBUFFERED") == "1"
+        assert env.get("PATH")
+        assert env.get("HOME")
+        for name in secrets:
+            assert name not in env
+    finally:
+        await sup.shutdown()

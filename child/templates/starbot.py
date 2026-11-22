@@ -6,7 +6,13 @@ import math
 import time
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -21,16 +27,17 @@ INFO = TemplateInfo(
     title="Звёздный бот",
     emoji="🌟",
     price_key="PRICE_STARBOT",
-    description="Пользователи зарабатывают звёзды за друзей, ежедневный бонус и задания "
-                "(подписки на каналы) и подают заявки на вывод Telegram Stars.",
+    description="Пользователи получают внутренние единицы за друзей, ежедневный бонус и задания "
+                "и подают заявки владельцу на ручную выплату. Внутренний баланс не является балансом Telegram Stars.",
     settings=[
-        Setting("welcome", "Приветствие", "🌟 Зарабатывай звёзды за друзей, бонусы и задания и выводи их!"),
+        Setting("welcome", "Приветствие", "🌟 Выполняй задания, приглашай друзей и получай внутренние единицы. "
+                "Заявки на выплату рассматривает владелец вручную; условия и реальные награды определяет владелец."),
         Setting("currency", "Валюта", "⭐"),
         Setting("ref_reward", "Звёзд за друга", 1, "float"),
         Setting("daily_bonus", "Ежедневный бонус", 0.5, "float"),
         Setting("min_withdraw", "Мин. вывод", 15, "float"),
         Setting("withdraw_details_prompt", "Текст запроса реквизитов",
-                "Укажите @username, на который отправить звёзды (подарком):"),
+                "Укажите реквизиты для заявки владельцу. Выплату владелец проводит вручную на согласованных с ним условиях:"),
         Setting("required_channel", "Обязательный канал", "", "channel"),
         Setting("channel_url", "Ссылка на канал (для приватных)", "-"),
     ],
@@ -119,6 +126,9 @@ def build_router(app) -> Router:
             await message.answer(f"⏳ Следующий бонус через {left // 3600} ч {left % 3600 // 60} мин.")
             return
         amount = float(app.s["daily_bonus"])
+        if not math.isfinite(amount) or amount < 0:
+            await message.answer("Начисление бонуса временно недоступно: владелец должен проверить настройки.")
+            return
         cur = app.db.exec("UPDATE users SET last_daily=?, balance=balance+? WHERE id=? AND last_daily<=?",
                           now, amount, uid, now - DAY)
         if cur.rowcount:
@@ -146,7 +156,11 @@ def build_router(app) -> Router:
 
     @r.callback_query(F.data.startswith("task:"))
     async def task_check(cb: CallbackQuery) -> None:
-        tid = int(cb.data.split(":")[1])
+        raw = cb.data.split(":", 1)[1]
+        if not raw.isascii() or not raw.isdigit() or len(raw) > 18:
+            await cb.answer("Задание недоступно", show_alert=True)
+            return
+        tid = int(raw)
         uid = cb.from_user.id
         t = app.db.one("SELECT * FROM tasks WHERE id=? AND active=1", tid)
         if not t:
@@ -154,20 +168,30 @@ def build_router(app) -> Router:
             return
         if t["channel"]:
             try:
+                rights = await cb.bot.get_chat_member(t["channel"], cb.bot.id)
+                if rights.status not in {"creator", "administrator"}:
+                    await cb.answer("Проверка недоступна: владелец должен выдать боту права администратора канала.",
+                                    show_alert=True)
+                    return
                 m = await cb.bot.get_chat_member(t["channel"], uid)
-                if m.status not in {"creator", "administrator", "member"} and not getattr(m, "is_member", False):
+                if m.status not in {"creator", "administrator", "member"} and not (
+                    m.status == "restricted" and getattr(m, "is_member", False)
+                ):
                     await cb.answer("❌ Вы не подписаны", show_alert=True)
                     return
-            except TelegramBadRequest:
-                pass  # бот не админ канала — засчитываем без проверки
-        with app.db.lock:
-            cur = app.db.exec("INSERT OR IGNORE INTO task_done(user_id, task_id) VALUES(?,?)", uid, tid)
-            if cur.rowcount:
-                app.db.add_balance(uid, t["reward"])
-        if not cur.rowcount:
-            await cb.answer("Уже выполнено", show_alert=True)
+            except (TelegramBadRequest, TelegramForbiddenError):
+                await cb.answer("Не удалось подтвердить подписку. Владелец бота должен проверить настройки задания.",
+                                show_alert=True)
+                return
+            except (TelegramNetworkError, TelegramServerError, TelegramRetryAfter, TimeoutError):
+                await cb.answer("Проверка временно недоступна. Награда пока не начислена; попробуйте позже.",
+                                show_alert=True)
+                return
+        reward = app.db.complete_task(uid, tid, expected=(t["url"], t["channel"], t["reward"]))
+        if reward is None:
+            await cb.answer("Задание уже выполнено или недоступно. Откройте список заданий заново.", show_alert=True)
             return
-        await cb.answer(f"✅ +{fmt(t['reward'])} {app.currency}", show_alert=True)
+        await cb.answer(f"✅ +{fmt(reward)} {app.currency}", show_alert=True)
         try:
             await cb.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:

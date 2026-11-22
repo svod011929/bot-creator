@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import math
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -223,6 +224,9 @@ async def send_profile(message: Message, app: ChildApp, uid: int) -> None:
         f"👥 Приглашено: {app.db.referrals(u['id'])}\n\n"
         f"🔗 Ваша ссылка:\n{app.ref_link(u['id'])}"
     )
+    if app.info.key == "starbot":
+        text += ("\n\n<i>Это внутренний баланс бота, а не баланс Telegram Stars. "
+                 "Условия реальных наград и ручных выплат уточняйте у владельца бота.</i>")
     await message.answer(text, disable_web_page_preview=True, reply_markup=history_entry())
 
 
@@ -331,7 +335,7 @@ def build_core_router(app: ChildApp) -> Router:
             return
         u = app.db.user(message.from_user.id)
         min_w = float(app.s.get("min_withdraw", 0) or 0)
-        if amount <= 0 or amount < min_w or amount > u["balance"]:
+        if not math.isfinite(amount) or amount <= 0 or amount < min_w or amount > u["balance"]:
             await message.answer(f"Сумма должна быть от {fmt(min_w)} до {fmt(u['balance'])} {app.currency}.")
             return
         await state.update_data(amount=amount)

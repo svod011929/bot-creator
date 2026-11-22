@@ -81,6 +81,23 @@ CREATE TABLE IF NOT EXISTS lave_invoices (
     paid_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS lave_invoices_status ON lave_invoices(status);
+CREATE TABLE IF NOT EXISTS payment_jobs (
+    local_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'received' CHECK(status IN ('received','applied')),
+    result_text TEXT,
+    received_at INTEGER NOT NULL,
+    applied_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_payment_jobs_status ON payment_jobs(status,local_id);
+CREATE TABLE IF NOT EXISTS bot_runtime_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_key TEXT NOT NULL UNIQUE,
+    bot_id INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('start','sync')),
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_runtime_jobs_pending ON bot_runtime_jobs(id) WHERE completed_at IS NULL;
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -217,6 +234,7 @@ class DB:
         existed = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
         self.conn.executescript(SCHEMA)
         self._lock = threading.RLock()
+        self._savepoint_counter = 0
         self._ensure_mode_columns()
         self._ensure_unsubscribe_schema()
         if self.kv_get("created_at") is None:
@@ -301,14 +319,21 @@ class DB:
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
-            self.conn.execute("BEGIN IMMEDIATE")
+            nested = self.conn.in_transaction
+            self._savepoint_counter += 1
+            point = f"operation_{self._savepoint_counter}"
+            self.conn.execute(f"SAVEPOINT {point}" if nested else "BEGIN IMMEDIATE")
             try:
                 yield self.conn
+                self.conn.execute(f"RELEASE SAVEPOINT {point}" if nested else "COMMIT")
             except BaseException:
-                self.conn.execute("ROLLBACK")
+                if self.conn.in_transaction:
+                    if nested:
+                        self.conn.execute(f"ROLLBACK TO SAVEPOINT {point}")
+                        self.conn.execute(f"RELEASE SAVEPOINT {point}")
+                    else:
+                        self.conn.execute("ROLLBACK")
                 raise
-            else:
-                self.conn.execute("COMMIT")
 
     def one(self, sql: str, *args: Any) -> sqlite3.Row | None:
         with self._lock:
@@ -409,14 +434,11 @@ class DB:
     def register_payment(self, charge_id: str, uid: int, amount: int, payload: str) -> bool:
         """Идемпотентность: False, если платёж уже обработан."""
         with self._lock:
-            try:
-                self.conn.execute(
-                    "INSERT INTO payments(charge_id,user_id,amount,payload,created_at) VALUES(?,?,?,?,?)",
-                    (charge_id, uid, amount, payload, now()),
-                )
-                return True
-            except sqlite3.IntegrityError:
-                return False
+            cur = self.conn.execute(
+                "INSERT INTO payments(charge_id,user_id,amount,payload,created_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(charge_id) DO NOTHING", (charge_id, uid, amount, payload, now()),
+            )
+            return cur.rowcount == 1
 
     # ---------- LavePay ----------
     def lave_new(self, uid: int, payload: str, amount: int, usd: str) -> int:
@@ -446,7 +468,38 @@ class DB:
 
     def lave_set_status(self, local_id: int, status: str) -> None:
         with self._lock:
-            self.conn.execute("UPDATE lave_invoices SET status=? WHERE id=? AND status<>'paid'", (status, local_id))
+            self.conn.execute("UPDATE lave_invoices SET status=? WHERE id=? AND status NOT IN ('paid','received')",
+                              (status, local_id))
+
+    def lave_receive(self, local_id: int) -> bool:
+        """Persist a validated paid event before acknowledging it; never replay untracked legacy payments."""
+        with self.tx() as c:
+            row = c.execute("SELECT status FROM lave_invoices WHERE id=?", (local_id,)).fetchone()
+            job = c.execute("SELECT 1 FROM payment_jobs WHERE local_id=?", (local_id,)).fetchone()
+            if not row or (row["status"] == "paid" and not job):
+                return False
+            if not job:
+                c.execute("INSERT INTO payment_jobs(local_id,received_at) VALUES(?,?)", (local_id, now()))
+                c.execute("UPDATE lave_invoices SET status='received' WHERE id=?", (local_id,))
+            return True
+
+    def lave_received(self) -> list[sqlite3.Row]:
+        return self.all("SELECT local_id FROM payment_jobs WHERE status='received' ORDER BY local_id LIMIT 100")
+
+    def enqueue_runtime(self, source_key: str, bot_id: int, action: str) -> None:
+        with self._lock:
+            self.conn.execute("INSERT INTO bot_runtime_jobs(source_key,bot_id,action,created_at) VALUES(?,?,?,?) "
+                              "ON CONFLICT(source_key) DO NOTHING",
+                              (source_key, bot_id, action, now()))
+
+    def runtime_pending(self, bot_id: int | None = None) -> list[sqlite3.Row]:
+        if bot_id is None:
+            return self.all("SELECT * FROM bot_runtime_jobs WHERE completed_at IS NULL ORDER BY id LIMIT 100")
+        return self.all("SELECT * FROM bot_runtime_jobs WHERE completed_at IS NULL AND bot_id=? ORDER BY id LIMIT 100", bot_id)
+
+    def runtime_complete(self, job_id: int) -> None:
+        with self._lock:
+            self.conn.execute("UPDATE bot_runtime_jobs SET completed_at=? WHERE id=? AND completed_at IS NULL", (now(), job_id))
 
     def lave_mark_paid(self, local_id: int) -> bool:
         """Атомарно переводит счёт в paid. False — уже был оплачен (повтор)."""

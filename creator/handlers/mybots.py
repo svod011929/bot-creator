@@ -223,11 +223,16 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
             await cb.answer("👑 VIP уже активен", show_alert=True)
             return
         try:
-            ctx.db.change_balance(cb.from_user.id, -ctx.price("VIP_PRICE"), "vip", f"VIP бота ID {bot_id}")
+            changed = await ctx.buy_vip_from_balance(cb.from_user.id, bot_id)
         except InsufficientFunds:
             await cb.answer("Недостаточно средств на балансе", show_alert=True)
             return
-        await ctx.set_vip(bot_id)
+        except ValueError:
+            await cb.answer("Бот не найден", show_alert=True)
+            return
+        if not changed:
+            await cb.answer("👑 VIP уже активен", show_alert=True)
+            return
         await cb.answer("👑 VIP активирован!", show_alert=True)
         await show_card(cb, ctx, bot_id)
         return

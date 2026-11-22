@@ -1,11 +1,13 @@
 """SQLite дочернего бота (у каждого бота свой файл bot.db)."""
 from __future__ import annotations
 
+import math
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -93,6 +95,19 @@ class ChildDB:
         with self.lock:
             return self.conn.execute(sql, a).fetchone()
 
+    @contextmanager
+    def tx(self) -> Iterator[sqlite3.Connection]:
+        """Serialize writers across connections and roll back the whole business operation."""
+        with self.lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self.conn
+                self.conn.execute("COMMIT")
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
     def all(self, sql: str, *a: Any) -> list[sqlite3.Row]:
         with self.lock:
             return self.conn.execute(sql, a).fetchall()
@@ -107,7 +122,7 @@ class ChildDB:
 
     # ---- пользователи ----
     def upsert_user(self, uid: int, username: str | None, full_name: str, referrer_id: int | None) -> bool:
-        with self.lock:
+        with self.tx():
             if self.one("SELECT 1 FROM users WHERE id=?", uid):
                 self.exec("UPDATE users SET username=?, full_name=?, blocked=0 WHERE id=?", username, full_name, uid)
                 return False
@@ -123,18 +138,24 @@ class ChildDB:
         return self.one("SELECT * FROM users WHERE id=?", uid)
 
     def add_balance(self, uid: int, amount: float) -> float:
+        if not math.isfinite(amount):
+            raise ValueError("Non-finite amount")
         with self.lock:
             self.exec("UPDATE users SET balance=balance+? WHERE id=?", amount, uid)
             return self.scalar("SELECT balance FROM users WHERE id=?", uid) or 0.0
 
     def try_spend(self, uid: int, amount: float) -> bool:
+        if not math.isfinite(amount) or amount < 0:
+            return False
         with self.lock:
             cur = self.exec("UPDATE users SET balance=balance-? WHERE id=? AND balance>=?", amount, uid, amount)
             return cur.rowcount == 1
 
     def reward_referrer_once(self, uid: int, reward: float) -> int | None:
         """Начисляет пригласившему награду за uid (один раз). Возвращает id пригласившего."""
-        with self.lock:
+        if not math.isfinite(reward) or reward < 0:
+            raise ValueError("Invalid reward")
+        with self.tx():
             u = self.user(uid)
             if not u or not u["referrer_id"] or u["ref_rewarded"]:
                 return None
@@ -142,6 +163,31 @@ class ChildDB:
             if reward > 0:
                 self.add_balance(u["referrer_id"], reward)
             return u["referrer_id"]
+
+    def complete_task(self, uid: int, tid: int, *, expected: tuple) -> float | None:
+        """Credit once, only if the checked task is still active and unchanged."""
+        with self.tx():
+            task = self.one("SELECT * FROM tasks WHERE id=? AND active=1", tid)
+            if not task or not self.user(uid) or (task["url"], task["channel"], task["reward"]) != expected:
+                return None
+            reward = task["reward"]
+            if not math.isfinite(reward) or reward <= 0:
+                return None
+            cur = self.exec("INSERT INTO task_done(user_id, task_id) VALUES(?,?) "
+                            "ON CONFLICT(user_id,task_id) DO NOTHING", uid, tid)
+            if not cur.rowcount:
+                return None
+            self.add_balance(uid, reward)
+            return reward
+
+    def try_upgrade(self, uid: int, *, level: int, cost: int, max_level: int) -> bool:
+        """A single conditional statement changes both balance and level."""
+        if cost < 0:
+            return False
+        with self.lock:
+            cur = self.exec("UPDATE users SET balance=balance-?,level=level+1 "
+                            "WHERE id=? AND level=? AND level<? AND balance>=?", cost, uid, level, max_level, cost)
+            return cur.rowcount == 1
 
     def referrals(self, uid: int) -> int:
         return self.scalar("SELECT COUNT(*) FROM users WHERE referrer_id=?", uid) or 0
@@ -154,7 +200,9 @@ class ChildDB:
 
     # ---- выводы ----
     def create_withdrawal(self, uid: int, amount: float, details: str, *, currency: str) -> int | None:
-        with self.lock:
+        if not math.isfinite(amount) or amount <= 0:
+            return None
+        with self.tx():
             if not self.try_spend(uid, amount):
                 return None
             cur = self.exec(
@@ -164,7 +212,7 @@ class ChildDB:
             return int(cur.lastrowid)
 
     def resolve_withdrawal(self, wid: int, approve: bool) -> sqlite3.Row | None:
-        with self.lock:
+        with self.tx():
             w = self.one("SELECT * FROM withdrawals WHERE id=? AND status='pending'", wid)
             if not w:
                 return None
