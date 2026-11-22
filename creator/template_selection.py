@@ -10,7 +10,12 @@ from creator.money import rub
 from creator.services import Ctx
 
 CONDITIONS_UNAVAILABLE = "Условия временно недоступны. Откройте выбор шаблона позже."
-DEMO_BOTS = {"clicker": "DDDClickerBot", "refbot": "DDDReferallBot", "starbot": "DDDFreeStarsBot"}
+DEMO_BOTS = {
+    "clicker": "DDDClickerBot",
+    "refbot": "DDDReferallBot",
+    "starbot": "DDDFreeStarsBot",
+    "microtasks": "DDDMicroTasksBot",
+}
 COMPARISON_HEADING = (
     "Выберите шаблон бота. Сравните возможности и стоимость, затем нажмите нужный вариант — "
     "откроется описание с инструкцией по токену"
