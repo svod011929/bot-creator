@@ -48,6 +48,7 @@ class ChildApp:
         self.template = templates.load(self.cfg["template"])
         self.info: templates.TemplateInfo = self.template.INFO
         self.db = ChildDB(self.dir / "bot.db")
+        self.game = self.template.create_game(self.db) if hasattr(self.template, "create_game") else None
         self.username: str = self.cfg.get("username") or ""
         self._settings: dict[str, Any] = {}
         self._mtime: float = -1
@@ -227,6 +228,8 @@ async def send_profile(message: Message, app: ChildApp, uid: int) -> None:
     if app.info.key == "starbot":
         text += ("\n\n<i>Это внутренний баланс бота, а не баланс Telegram Stars. "
                  "Условия реальных наград и ручных выплат уточняйте у владельца бота.</i>")
+    if hasattr(app.template, "profile_extra"):
+        text += app.template.profile_extra(app, uid)
     await message.answer(text, disable_web_page_preview=True, reply_markup=history_entry())
 
 
@@ -326,7 +329,7 @@ def build_core_router(app: ChildApp) -> Router:
         await state.clear()
         await message.answer("Отменено.", reply_markup=app.menu(message.from_user.id))
 
-    @r.message(Withdraw.amount)
+    @r.message(Withdraw.amount, ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
     async def withdraw_amount(message: Message, state: FSMContext) -> None:
         try:
             amount = float((message.text or "").replace(",", "."))
@@ -342,7 +345,7 @@ def build_core_router(app: ChildApp) -> Router:
         await state.set_state(Withdraw.details)
         await message.answer(str(app.s.get("withdraw_details_prompt", "Укажите реквизиты для выплаты:")))
 
-    @r.message(Withdraw.details)
+    @r.message(Withdraw.details, ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
     async def withdraw_details(message: Message, state: FSMContext) -> None:
         from child.withdrawals import format_unit
 
@@ -432,6 +435,7 @@ def build_admin_router(app: ChildApp) -> Router:
             f"✅ Отмечено выплаченными: {sum(n for _, n, _ in paid)}"
             + ("\n" + "\n".join(lines) if lines else "")
             + "\n\n<i>Суммы — по единице, сохранённой в каждой заявке; это ручные отметки, не подтверждение перевода.</i>"
+            + (app.template.admin_stats_extra(app) if hasattr(app.template, "admin_stats_extra") else "")
         )
         await cb.answer()
 
