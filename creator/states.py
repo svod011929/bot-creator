@@ -31,6 +31,10 @@ class BotList(StatesGroup):
     search = State()
 
 
+class ContentInput(StatesGroup):
+    active = State()
+
+
 class Withdraw(StatesGroup):
     details = State()
     amount = State()

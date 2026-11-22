@@ -1,4 +1,5 @@
 """SQLite дочернего бота (у каждого бота свой файл bot.db)."""
+
 from __future__ import annotations
 
 import math
@@ -58,6 +59,17 @@ def fmt(x: float) -> str:
 
 
 class ChildDB:
+    @classmethod
+    def open_existing(cls, path: Path | str, *, writable: bool = False) -> ChildDB:
+        """Open an existing file without creating tables, migrating data or changing journal mode."""
+        db = cls.__new__(cls)
+        uri = Path(path).absolute().as_uri() + ("?mode=rw" if writable else "?mode=ro")
+        db.conn = sqlite3.connect(uri, uri=True, check_same_thread=False, isolation_level=None)
+        db.conn.row_factory = sqlite3.Row
+        db.lock = threading.RLock()
+        db._savepoint_counter = 0
+        return db
+
     def __init__(self, path: Path | str):
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -138,7 +150,11 @@ class ChildDB:
                 referrer_id = None
             self.exec(
                 "INSERT INTO users(id,username,full_name,referrer_id,created_at) VALUES(?,?,?,?,?)",
-                uid, username, full_name, referrer_id, now(),
+                uid,
+                username,
+                full_name,
+                referrer_id,
+                now(),
             )
             return True
 
@@ -181,8 +197,9 @@ class ChildDB:
             reward = task["reward"]
             if not math.isfinite(reward) or reward <= 0:
                 return None
-            cur = self.exec("INSERT INTO task_done(user_id, task_id) VALUES(?,?) "
-                            "ON CONFLICT(user_id,task_id) DO NOTHING", uid, tid)
+            cur = self.exec(
+                "INSERT INTO task_done(user_id, task_id) VALUES(?,?) ON CONFLICT(user_id,task_id) DO NOTHING", uid, tid
+            )
             if not cur.rowcount:
                 return None
             self.add_balance(uid, reward)
@@ -193,8 +210,14 @@ class ChildDB:
         if cost < 0:
             return False
         with self.lock:
-            cur = self.exec("UPDATE users SET balance=balance-?,level=level+1 "
-                            "WHERE id=? AND level=? AND level<? AND balance>=?", cost, uid, level, max_level, cost)
+            cur = self.exec(
+                "UPDATE users SET balance=balance-?,level=level+1 WHERE id=? AND level=? AND level<? AND balance>=?",
+                cost,
+                uid,
+                level,
+                max_level,
+                cost,
+            )
             return cur.rowcount == 1
 
     def referrals(self, uid: int) -> int:
@@ -215,7 +238,11 @@ class ChildDB:
                 return None
             cur = self.exec(
                 "INSERT INTO withdrawals(user_id,amount,details,created_at,currency_at_request) VALUES(?,?,?,?,?)",
-                uid, amount, details, now(), currency,
+                uid,
+                amount,
+                details,
+                now(),
+                currency,
             )
             return int(cur.lastrowid)
 
@@ -226,7 +253,9 @@ class ChildDB:
                 return None
             changed = self.exec(
                 "UPDATE withdrawals SET status=?,resolved_at=? WHERE id=? AND status='pending'",
-                "paid" if approve else "rejected", now(), wid,
+                "paid" if approve else "rejected",
+                now(),
+                wid,
             )
             if changed.rowcount != 1:
                 return None
@@ -253,14 +282,20 @@ class ChildDB:
         with self.lock:
             total = self.scalar(f"SELECT COUNT(*) FROM withdrawals WHERE {where}", *args)
             page = min(page, max(0, (total - 1) // 10))
-            rows = self.all(f"SELECT * FROM withdrawals WHERE {where} "
-                            f"ORDER BY created_at {direction}, id {direction} LIMIT 10 OFFSET ?", *args, page * 10)
+            rows = self.all(
+                f"SELECT * FROM withdrawals WHERE {where} ORDER BY created_at {direction}, id {direction} LIMIT 10 OFFSET ?",
+                *args,
+                page * 10,
+            )
             return rows, page, total
 
     def paid_by_unit(self, limit: int = 10) -> list[tuple[str | None, int, float]]:
         """Requests marked paid, grouped by the unit stored with each request (never summed across units)."""
-        rows = self.all("SELECT currency_at_request, COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
-                        "WHERE status='paid' GROUP BY currency_at_request ORDER BY COUNT(*) DESC LIMIT ?", limit)
+        rows = self.all(
+            "SELECT currency_at_request, COUNT(*), COALESCE(SUM(amount),0) FROM withdrawals "
+            "WHERE status='paid' GROUP BY currency_at_request ORDER BY COUNT(*) DESC LIMIT ?",
+            limit,
+        )
         return [(r[0], int(r[1]), float(r[2])) for r in rows]
 
     def stats(self) -> dict[str, Any]:

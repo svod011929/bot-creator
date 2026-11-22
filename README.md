@@ -3,6 +3,16 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 5 Creator content
+
+Owners can manage referral-club campaigns and star-journey cards from the constructor:
+catalog, drafts, a participant preview that awards nothing, calendar, pause/resume and copy.
+Creator forms are stored separately in an additive `creator_content_forms` table in the child
+database and survive constructor restarts. Viewing does not migrate, start a child, pay for
+hosting or send messages. Clicker catalogs are unchanged. Money, withdrawal and reward rules
+are unchanged. See `STAGE5_CHANGES.md` and `docs/CREATOR_CONTENT.md`. Stacked on deployed
+`0010d45` and keeps the Stage 1 post-review fixes.
+
 ## Stage 4 Star journey
 
 Star bot now has daily routes, 24 starter knowledge cards, memory exercises, check-in streaks, nine missions,

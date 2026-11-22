@@ -162,10 +162,13 @@ class StarJourney:
         owner_id: int,
         owner_check: Callable[[int], bool] | None = None,
         clock: Callable[[], float] | None = None,
+        initialize: bool = True,
     ):
         self.db, self.owner_id = db, owner_id
         self.owner_check = owner_check or (lambda uid: uid == owner_id)
         self.clock = clock or time.time
+        if not initialize:
+            return
         with db.lock:
             if db.conn.in_transaction:
                 raise RuntimeError("Initialize Star game outside transactions")
@@ -601,6 +604,28 @@ class StarJourney:
             self._event(cid, actor, "draft", 1)
             return cid
 
+    def update_draft(self, actor, cid, revision, values):
+        with self.db.tx():
+            self._owner(actor)
+            c = self._card(cid)
+            if c["status"] != "draft" or c["revision"] != revision:
+                raise JourneyError("Карточка уже изменилась или опубликована. Удалите устаревшую форму.")
+            data = self._validated(values)
+            self.db.exec(
+                "UPDATE star_cards SET category=?,title=?,lesson=?,question=?,answers_json=?,correct=?,start_day=?,days=?,"
+                "revision=revision+1 WHERE id=?",
+                data["category"],
+                data["title"],
+                data["lesson"],
+                data["question"],
+                json.dumps(data["answers"], ensure_ascii=False),
+                data["correct"],
+                data["starts"],
+                data["days"],
+                cid,
+            )
+            self._event(cid, actor, "edit", revision + 1)
+
     def publish(self, actor, cid, revision):
         with self.db.tx():
             self._owner(actor)
@@ -728,23 +753,7 @@ class StarJourney:
             if cid is None:
                 cid = self.create_draft(actor, data)
             else:
-                c = self._card(cid)
-                if c["status"] != "draft" or c["revision"] != draft["card_revision"]:
-                    raise JourneyError("Карточка уже изменилась или опубликована. Удалите устаревшую форму.")
-                self.db.exec(
-                    "UPDATE star_cards SET category=?,title=?,lesson=?,question=?,answers_json=?,correct=?,start_day=?,days=?,"
-                    "revision=revision+1 WHERE id=?",
-                    data["category"],
-                    data["title"],
-                    data["lesson"],
-                    data["question"],
-                    json.dumps(data["answers"], ensure_ascii=False),
-                    data["correct"],
-                    data["starts"],
-                    data["days"],
-                    cid,
-                )
-                self._event(cid, actor, "edit", c["revision"] + 1)
+                self.update_draft(actor, cid, draft["card_revision"], data)
             self.db.exec("DELETE FROM star_editor WHERE owner_id=?", actor)
             return cid
 
