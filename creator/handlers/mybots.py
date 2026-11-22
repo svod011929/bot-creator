@@ -54,6 +54,18 @@ def card_text(ctx: Ctx, b) -> str:
     ]
     if b["sale_price"] is not None:
         lines.append(f"🛒 Выставлен на продажу за {rub(b['sale_price'])}")
+    tools = ["оформление"]
+    if b["template"] in {"clicker", "refbot", "starbot"}:
+        tools.append("контент")
+    if b["template"] == "clicker":
+        tools.append("события")
+    elif b["template"] == "refbot":
+        tools.append("команды")
+    elif b["template"] == "starbot":
+        tools.append("треки")
+    if b["template"] in {"clicker", "refbot"}:
+        tools.append("LavePay")
+    lines.append(f"Инструменты: {', '.join(tools)}")
     if ctx.tgrass is not None:
         lines.append(_network_status_line("TGrass", ctx.db.tgrass(b["id"])))
     if ctx.piarflow is not None:
