@@ -15,6 +15,8 @@ from child.clicker_events import ClickerEvents
 from child.db import ChildDB
 from child.referral_club import SCHEMA as CLUB_SCHEMA
 from child.referral_club import WIZARD_FIELDS, ReferralClub, validate_field
+from child.referral_teams import SCHEMA as TEAM_SCHEMA
+from child.referral_teams import ReferralTeams
 from child.star_journey import EDITOR_FIELDS, StarJourney
 from child.star_journey import SCHEMA as STAR_SCHEMA
 from creator.bot_setup import MAX_JSON, TOKEN_LIKE, _read_object
@@ -155,6 +157,24 @@ class Content:
 
     def __getattr__(self, name):
         return getattr(self.engine, name)
+
+    def team_catalog(self, *, prepare=False):
+        if self.code != "r" or not self.engine:
+            raise ContentError("Команды доступны в подготовленном реферальном клубе.")
+        self.engine._owner(self.uid)
+        required = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", TEAM_SCHEMA))
+        present = {row[0] for row in self.db.all("SELECT name FROM sqlite_master WHERE type='table'")}
+        ready = required <= present
+        if not ready and required & present:
+            raise ContentError("Версия команд не поддерживается. Нужна сверка установленного пакета.")
+        if not ready and not prepare:
+            return None
+
+        def owner_check(actor):
+            self.engine._owner(actor)
+            return True
+
+        return ReferralTeams(self.db, owner_id=self.uid, owner_check=owner_check, clock=self.now_value, initialize=not ready)
 
     @property
     def fields(self):

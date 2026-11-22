@@ -8,6 +8,9 @@ from aiogram.types import Message
 
 from child.db import fmt
 from child.referral_club import ReferralClub
+from child.referral_teams import ReferralTeams
+from child.referral_teams_views import BTN_TEAMS
+from child.referral_teams_views import build_router as teams_router
 from child.referral_views import BTN_CLUB
 from child.referral_views import build_router as club_router
 from child.templates import Setting, TemplateInfo
@@ -18,7 +21,8 @@ INFO = TemplateInfo(
     title="Реф. бот",
     emoji="👥",
     price_key="PRICE_REFBOT",
-    description="Реферальный клуб с кампаниями, заданиями, подтверждёнными приглашениями, целями и достижениями. "
+    description="Реферальный клуб с кампаниями, заданиями, подтверждёнными приглашениями, целями, достижениями "
+                "и командами недели с общим прогрессом и памятными значками. "
                 "Клубные баллы учитываются отдельно от денежного баланса и ручных выплат.",
     settings=[
         Setting("welcome", "Приветствие", "👋 Приглашай друзей и участвуй в кампаниях! Открой «🚀 Клуб»: "
@@ -35,19 +39,23 @@ INFO = TemplateInfo(
         Setting("about", "Текст «О боте»", "Приглашайте друзей по своей ссылке. Награда начисляется, "
                                         "когда друг подпишется на канал."),
     ],
-    version=2,
-    capabilities=("campaigns", "qualification", "club_points", "quiz", "goals"),
+    version=3,
+    capabilities=("campaigns", "qualification", "club_points", "quiz", "goals", "weekly_teams"),
 )
 
 BTN_INVITE = "👥 Пригласить друзей"
 BTN_TOP = "🏆 Топ рефоводов"
 BTN_ABOUT = "ℹ️ О боте"
-STATE_ESCAPE_TEXTS = (BTN_CLUB,)
+STATE_ESCAPE_TEXTS = (BTN_CLUB, BTN_TEAMS)
 ADMIN_BUTTONS = [("🚀 Кампании клуба", "club:admin:0")]
 
 
 def create_club(app):
     return ReferralClub(app.db, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
+
+
+def create_teams(app):
+    return ReferralTeams(app.db, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
 
 
 def start_user(app, user, payload, *, private=True):
@@ -61,11 +69,16 @@ def on_access_confirmed(app, uid):
 
 
 def pause_forms(app, uid):
+    app.teams.form_pause(uid)
     if is_owner(app, uid):
         app.club.wizard_pause(uid)
 
 
 def cancel_form(app, uid):
+    form = app.teams.form_get(uid)
+    if form and form["active"]:
+        app.teams.form_discard(uid, form["version"])
+        return
     if is_owner(app, uid):
         app.club.wizard_discard(uid)
 
@@ -85,7 +98,7 @@ def admin_stats_extra(app):
 
 
 def menu_rows(app) -> list[list[str]]:
-    return [[BTN_CLUB], [BTN_INVITE, BTN_TOP], [BTN_ABOUT]]
+    return [[BTN_CLUB, BTN_TEAMS], [BTN_INVITE, BTN_TOP], [BTN_ABOUT]]
 
 
 def build_router(app) -> Router:
@@ -122,5 +135,6 @@ def build_router(app) -> Router:
         pause_forms(app, message.from_user.id)
         await message.answer(html.escape(str(app.s["about"])) + app.footer())
 
+    r.include_router(teams_router(app))
     r.include_router(club_router(app))
     return r

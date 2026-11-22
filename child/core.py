@@ -61,6 +61,7 @@ class ChildApp:
         self.club = self.template.create_club(self) if hasattr(self.template, "create_club") else None
         self.sky = self.template.create_journey(self) if hasattr(self.template, "create_journey") else None
         self.events = self.template.create_events(self) if hasattr(self.template, "create_events") else None
+        self.teams = self.template.create_teams(self) if hasattr(self.template, "create_teams") else None
         self.username: str = self.cfg.get("username") or ""
         self._settings: dict[str, Any] = {}
         self._mtime: float = -1

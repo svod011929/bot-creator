@@ -3,6 +3,16 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 8 weekly referral teams
+
+Club participants can create or join a team of up to five for the current Moscow calendar week.
+Daily check-in, new campaign answers and newly qualified friends contribute to a shared goal;
+inviting is optional. A lasting badge needs the shared goal, at least two members and a personal
+contribution. Team scores never change cash balances or club points, and joining does not set a
+referrer or send messages. Owners get a weekly report and can pause new entries from the
+constructor. See `STAGE8_CHANGES.md` and `docs/REFERRAL_TEAMS.md`. Stacked on deployed
+`4b9eefc` and keeps the Stage 1 post-review fixes.
+
 ## Stage 7 clicker events
 
 Clicker bots gain scheduled challenges: new-tap, expedition and distinct-route goals, a one-time

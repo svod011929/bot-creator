@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from child.clicker_events import EventError
 from child.referral_club import ClubError
+from child.referral_teams import TeamError
 from child.star_journey import JourneyError
 from creator import content_views as views
 from creator.content import KINDS, ContentError, decode, open_content
@@ -18,8 +19,19 @@ from creator.states import ContentInput
 
 router = Router(name="creator-content")
 WRITING = {"new", "resume", "edit", "field", "correct", "input"}
-MUTATIONS = WRITING | {"save", "publish", "pause", "activate", "copy", "discard", "prepare"}
-ERRORS = (ContentError, ClubError, JourneyError, EventError)
+MUTATIONS = WRITING | {
+    "save",
+    "publish",
+    "pause",
+    "activate",
+    "copy",
+    "discard",
+    "prepare",
+    "team_prepare",
+    "team_pause",
+    "team_activate",
+}
+ERRORS = (ContentError, ClubError, JourneyError, EventError, TeamError)
 
 
 def perform(c, action, args):
@@ -29,6 +41,19 @@ def perform(c, action, args):
         return views.home(c)
     if c.engine is None:
         raise ContentError("Сначала подготовьте каталог на главном экране контента.")
+    if action in {"teams", "team", "team_prepare", "team_pause", "team_activate"} and c.code == "r":
+        expected = {"teams": 2, "team": 1, "team_prepare": 0, "team_pause": 2, "team_activate": 2}[action]
+        if len(args) != expected:
+            raise ContentError("Кнопка устарела. Откройте команды заново.")
+        values = [decode(arg) for arg in args]
+        engine = c.team_catalog(prepare=action == "team_prepare")
+        if action in {"team_pause", "team_activate"}:
+            if engine is None:
+                raise ContentError("Сначала подготовьте команды.")
+            engine.set_status(c.uid, values[0], "paused" if action == "team_pause" else "open", values[1])
+        if action == "teams":
+            return views.team_screen(c, engine, offset=values[0], page=values[1])
+        return views.team_screen(c, engine, tid=values[0] if values else None)
     if action == "admin" and len(args) == 1:
         return views.catalog(c, decode(args[0]))
     if action == "calendar" and len(args) == 1:
