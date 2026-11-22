@@ -8,7 +8,7 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from creator.keyboards import MENU_BUTTONS, main_kb
+from creator.keyboards import BTN_ADMIN, MENU_BUTTONS, main_kb
 from creator.services import Ctx
 
 router = Router(name="common")
@@ -42,7 +42,8 @@ class UserMiddleware(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 await event.answer("Доступ ограничен", show_alert=True)
             return None
-        if isinstance(event, Message) and event.text in MENU_BUTTONS:
+        if isinstance(event, Message) and (event.text in MENU_BUTTONS
+                                           or (event.text == BTN_ADMIN and ctx.is_admin(user.id))):
             state: FSMContext | None = data.get("state")
             if state is not None:
                 ctx.source_inputs.pop(user.id, None)
@@ -71,7 +72,7 @@ async def start(message: Message, command: CommandObject, state: FSMContext, ctx
     if command.args and command.args.startswith("ref") and command.args[3:].isdigit():
         ref = int(command.args[3:])
     is_new = ctx.db.upsert_user(u.id, u.username, u.full_name, ref)
-    await message.answer(WELCOME, reply_markup=main_kb())
+    await message.answer(WELCOME, reply_markup=main_kb(ctx.is_admin(u.id)))
     if is_new and ref and ctx.db.user(u.id)["referrer_id"] == ref:
         try:
             await message.bot.send_message(ref, "👥 По вашей партнёрской ссылке зарегистрировался новый пользователь!")
@@ -93,4 +94,4 @@ async def cancel_cmd(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     ctx.bot_lists.pop(message.from_user.id, None)
     ctx.source_inputs.pop(message.from_user.id, None)
-    await message.answer("❌ Отменено.", reply_markup=main_kb())
+    await message.answer("❌ Отменено.", reply_markup=main_kb(ctx.is_admin(message.from_user.id)))
