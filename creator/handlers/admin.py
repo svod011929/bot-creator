@@ -49,9 +49,13 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
                    [btn("🔎 Найти бота", "a:botfind")]],
         "bc": [[btn("📢 Рассылка по конструктору", "a:bc")], [btn("📢 Рассылка по ботам", "a:bcb")],
                    [btn("📰 Новость (бот + канал)", "a:news")]],
-        "fin": [[btn("💰 Цены", "a:prices"), btn("💳 LavePay", "a:lave:0")]],
+        "fin": [[btn("💰 Цены и тарифы", "a:prices")],
+                   [btn("💳 LavePay", "a:lave:0")]],
         "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")],
                    [btn("💡 Идеи пользователей", "a:ideas")]],
+        "settings": [[btn("🔒 Обязательная подписка", "a:set:gate")],
+                     [btn("💡 Награда за идеи", "a:set:reward")],
+                     [btn("📞 Контакты поддержки", "a:set:contacts")]],
     }
     integ = []
     if ctx is not None and ctx.tgrass is not None:
@@ -70,6 +74,7 @@ GROUP_TITLES = {
     "bc": "📢 Рассылки",
     "fin": "💰 Финансы",
     "tools": "🛠 Инструменты",
+    "settings": "⚙️ Настройки",
     "integ": "🔌 Интеграции",
 }
 
@@ -78,7 +83,8 @@ def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
     groups = _group_rows(ctx, uid)
     rows = [[btn("📊 Статистика", "a:stats")],
             [btn(GROUP_TITLES["people"], "a:g:people"), btn(GROUP_TITLES["bc"], "a:g:bc")],
-            [btn(GROUP_TITLES["fin"], "a:g:fin"), btn(GROUP_TITLES["tools"], "a:g:tools")]]
+            [btn(GROUP_TITLES["fin"], "a:g:fin"), btn(GROUP_TITLES["tools"], "a:g:tools")],
+            [btn(GROUP_TITLES["settings"], "a:g:settings")]]
     if "integ" in groups:
         rows.append([btn(GROUP_TITLES["integ"], "a:g:integ")])
     if ctx is not None and uid is not None and uid == ctx.cfg.approver:
@@ -173,27 +179,55 @@ def show_price(key: str, value: int) -> str:
     return rub(value) if key in MONEY_KEYS else str(value)
 
 
+PRICE_GROUPS = [
+    ("Шаблоны", ["PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS"]),
+    ("Хостинг и VIP", ["HOSTING_DAY_PRICE", "START_HOSTING_DAYS", "VIP_PRICE"]),
+    ("Проценты", ["REF_PERCENT", "RESALE_FEE_PERCENT"]),
+    ("LavePay", ["LAVE_USD_RUB"]),
+    ("Вывод", ["WITHDRAW_MIN", "WITHDRAW_FEE_PERCENT"]),
+    ("TGrass", ["TGRASS_REWARD", "TGRASS_MIN_USERS"]),
+    ("PiarFlow", ["PIARFLOW_REWARD", "PIARFLOW_MIN_USERS"]),
+]
+
+
 @router.callback_query(F.data == "a:prices")
 async def prices(cb: CallbackQuery, ctx: Ctx) -> None:
-    rows = [[btn(f"{label}: {show_price(key, ctx.price(key))}", f"a:price:{key}")] for key, label in PRICE_KEYS.items()
-            if (ctx.tgrass is not None or not key.startswith("TGRASS_"))
-            and (ctx.piarflow is not None or not key.startswith("PIARFLOW_"))]
-    rows.append([btn("⬅️ Назад", "a:main")])
-    await cb.message.edit_text("💰 <b>Цены</b> (нажмите, чтобы изменить)", reply_markup=ikb(*rows))
+    rows = []
+    for title, keys in PRICE_GROUPS:
+        visible = [k for k in keys if k in PRICE_KEYS
+                   and (ctx.tgrass is not None or not k.startswith("TGRASS_"))
+                   and (ctx.piarflow is not None or not k.startswith("PIARFLOW_"))]
+        if not visible:
+            continue
+        rows.append([btn(f"— {title} —", "a:prices")])
+        for k in visible:
+            rows.append([btn(f"{PRICE_KEYS[k]}: {show_price(k, ctx.price(k))}", f"a:price:{k}")])
+    rows.append([btn("⬅️ Назад", "a:g:fin")])
+    await cb.message.edit_text(
+        "💰 <b>Цены и тарифы</b>\nНажмите на значение, чтобы изменить.",
+        reply_markup=ikb(*rows),
+        disable_web_page_preview=True,
+    )
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("a:price:"))
-async def price_pick(cb: CallbackQuery, state: FSMContext) -> None:
+async def price_pick(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     key = cb.data.split(":", 2)[2]
     if key not in PRICE_KEYS:
         await cb.answer()
         return
     await state.set_state(Admin.price)
     await state.update_data(key=key)
-    hint = "сумма в ₽, можно с копейками: 225 или 4,50" if key in MONEY_KEYS else "целое число ≥ 0"
-    await cb.message.edit_text(f"Введите новое значение «{PRICE_KEYS[key]}» ({hint}):",
-                               reply_markup=cancel_kb("a:prices"))
+    current = show_price(key, ctx.price(key))
+    hint = "сумма в ₽ (225 или 4,50)" if key in MONEY_KEYS else "целое число ≥ 0"
+    await cb.message.edit_text(
+        f"💰 <b>{PRICE_KEYS[key]}</b>\n\n"
+        f"Сейчас: <b>{current}</b>\n"
+        f"Введите новое значение ({hint}):",
+        reply_markup=cancel_kb("a:prices"),
+        disable_web_page_preview=True,
+    )
     await cb.answer()
 
 
@@ -923,17 +957,183 @@ async def admin_ideas(cb: CallbackQuery, ctx: Ctx) -> None:
 @router.callback_query(F.data.startswith("a:ideaok:"))
 async def admin_idea_accept(cb: CallbackQuery, ctx: Ctx) -> None:
     iid = int(cb.data.split(":")[2])
-    from creator.handlers.ideas import REWARD_KOP
-    idea = ctx.db.idea_accept(iid, REWARD_KOP)
+    from creator.handlers.ideas import idea_reward_kop
+    from creator.money import rub
+    reward = idea_reward_kop(ctx)
+    idea = ctx.db.idea_accept(iid, reward)
     if not idea:
         await cb.answer("Идея уже обработана", show_alert=True)
         return
     try:
+        credited = f"На баланс начислено {rub(reward)}.\n" if reward else ""
         await cb.bot.send_message(
             idea["user_id"],
-            f"🎉 Ваша идея #{iid} принята!\nНа баланс начислено 50 ₽.\nСпасибо, что помогаете развивать конструктор!",
+            f"🎉 Ваша идея #{iid} принята!\n{credited}Спасибо, что помогаете развивать конструктор!",
         )
     except Exception:  # noqa: BLE001
         pass
     await cb.answer("Идея принята, награда начислена")
     await admin_ideas(cb, ctx)
+
+
+def _kv(ctx: Ctx, key: str, default: str = "") -> str:
+    value = ctx.db.kv_get(key)
+    return value if value not in (None, "") else default
+
+
+def _mask_url(url: str) -> str:
+    """Show a t.me link in admin UI but keep invite tokens out of logs."""
+    return url or "—"
+
+
+SETTING_LABELS = {
+    "gate_channel_url": "ссылку на канал (https://t.me/имя или t.me/+…)",
+    "gate_chat_url": "ссылку на чат (https://t.me/имя или t.me/+…)",
+    "gate_channel_id": "числовой ID канала",
+    "gate_chat_id": "числовой ID чата",
+    "idea_reward_kop": "награду в ₽, например 50 (от 0 до 10 000)",
+    "support_channel": "ссылку на канал в «Информации»",
+    "support_chat": "ссылку на чат в «Информации»",
+    "support_admin": "ссылку на администратора",
+}
+URL_SETTING_KEYS = {
+    "gate_channel_url", "gate_chat_url", "support_channel", "support_chat", "support_admin",
+}
+ID_SETTING_KEYS = {"gate_channel_id", "gate_chat_id"}
+ALLOWED_SETTING_KEYS = URL_SETTING_KEYS | ID_SETTING_KEYS | {"idea_reward_kop"}
+
+
+@router.callback_query(F.data == "a:set:gate")
+async def set_gate(cb: CallbackQuery, ctx: Ctx) -> None:
+    from creator.handlers.gate import gate_is_on
+    enabled = gate_is_on(ctx)
+    ch = _kv(ctx, "gate_channel_url", ctx.cfg.channel_url) or "—"
+    chat = _kv(ctx, "gate_chat_url", ctx.cfg.chat_url) or "—"
+    ch_id = _kv(ctx, "gate_channel_id", str(ctx.cfg.channel_chat_id or "") ) or "—"
+    chat_id = _kv(ctx, "gate_chat_id", str(ctx.cfg.chat_chat_id or "") ) or "—"
+    text = (
+        "🔒 <b>Обязательная подписка</b>\n\n"
+        f"Сейчас: {'включена' if enabled else 'выключена'}\n"
+        f"Канал: <code>{html.escape(_mask_url(ch))}</code>\n"
+        f"ID канала: <code>{html.escape(str(ch_id))}</code>\n"
+        f"Чат: <code>{html.escape(_mask_url(chat))}</code>\n"
+        f"ID чата: <code>{html.escape(str(chat_id))}</code>\n\n"
+        "Для закрытой ссылки бот должен быть администратором, а ID задан здесь "
+        "или пересылкой поста из канала/чата конструктору."
+    )
+    kb = ikb(
+        [btn("🔄 Вкл/выкл", "a:set:gate_toggle")],
+        [btn("📢 Ссылка канала", "a:set:in:gate_channel_url"),
+         btn("🆔 ID канала", "a:set:in:gate_channel_id")],
+        [btn("💬 Ссылка чата", "a:set:in:gate_chat_url"),
+         btn("🆔 ID чата", "a:set:in:gate_chat_id")],
+        [btn("⬅️ Назад", "a:g:settings")],
+    )
+    await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:set:gate_toggle")
+async def set_gate_toggle(cb: CallbackQuery, ctx: Ctx) -> None:
+    from creator.handlers.gate import gate_is_on
+    new = "0" if gate_is_on(ctx) else "1"
+    ctx.db.kv_set("gate_enabled", new)
+    ctx.db.log_admin(cb.from_user.id, "settings", target="gate_enabled", detail=f"new={new}")
+    await set_gate(cb, ctx)
+
+
+@router.callback_query(F.data == "a:set:reward")
+async def set_reward(cb: CallbackQuery, ctx: Ctx) -> None:
+    from creator.handlers.ideas import IDEA_REWARD_MAX_KOP, idea_reward_kop
+    reward = idea_reward_kop(ctx)
+    text = (
+        "💡 <b>Награда за идеи</b>\n\n"
+        f"Сейчас: <b>{rub(reward)}</b>\n"
+        f"Можно поставить от 0 до {rub(IDEA_REWARD_MAX_KOP)}. "
+        "Новости и начисление награды остаются включены."
+    )
+    kb = ikb(
+        [btn("✏️ Изменить", "a:set:in:idea_reward_kop")],
+        [btn("⬅️ Назад", "a:g:settings")],
+    )
+    await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("a:set:in:"))
+async def set_prompt(cb: CallbackQuery, state: FSMContext) -> None:
+    key = cb.data.removeprefix("a:set:in:")
+    if key not in ALLOWED_SETTING_KEYS:
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    await state.set_state(Admin.settings_input)
+    await state.update_data(set_key=key)
+    await cb.message.answer(
+        f"Пришлите {SETTING_LABELS.get(key, key)}:",
+        reply_markup=cancel_kb("a:g:settings"),
+    )
+    await cb.answer()
+
+
+@router.message(Admin.settings_input)
+async def set_save(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    from creator.config import support_url
+    from creator.handlers.ideas import IDEA_REWARD_MAX_KOP
+    data = await state.get_data()
+    key = data.get("set_key")
+    await state.clear()
+    if key not in ALLOWED_SETTING_KEYS:
+        await message.answer("Сессия устарела.")
+        return
+    raw = (message.text or "").strip()
+    detail = "updated"
+    if key == "idea_reward_kop":
+        value = parse_rub(raw)
+        if value is None or value < 0 or value > IDEA_REWARD_MAX_KOP:
+            await message.answer(
+                f"Нужна сумма в ₽ от 0 до {rub(IDEA_REWARD_MAX_KOP)}, например 50."
+            )
+            return
+        stored = str(value)
+        detail = f"new={value}"
+    elif key in ID_SETTING_KEYS:
+        if not raw.lstrip("-").isdigit():
+            await message.answer("Нужно целое число (ID чата или канала).")
+            return
+        stored = str(int(raw))
+        detail = f"new={stored}"
+    elif key in URL_SETTING_KEYS:
+        url = support_url(raw)
+        if not url:
+            await message.answer("Нужна ссылка вида https://t.me/имя или https://t.me/+…")
+            return
+        stored = url
+        detail = "updated"
+    else:
+        await message.answer("Нельзя изменить это поле.")
+        return
+    ctx.db.kv_set(key, stored)
+    ctx.db.log_admin(message.from_user.id, "settings", target=key, detail=detail)
+    await message.answer("✅ Сохранено.", reply_markup=ikb([btn("⬅️ К настройкам", "a:g:settings")]))
+
+
+@router.callback_query(F.data == "a:set:contacts")
+async def set_contacts(cb: CallbackQuery, ctx: Ctx) -> None:
+    ch = _kv(ctx, "support_channel", ctx.cfg.channel_url) or "—"
+    chat = _kv(ctx, "support_chat", ctx.cfg.chat_url) or "—"
+    admin = _kv(ctx, "support_admin", ctx.cfg.admin_url) or "—"
+    text = (
+        "📞 <b>Контакты поддержки</b>\n\n"
+        f"Канал: <code>{html.escape(_mask_url(ch))}</code>\n"
+        f"Чат: <code>{html.escape(_mask_url(chat))}</code>\n"
+        f"Админ: <code>{html.escape(_mask_url(admin))}</code>\n\n"
+        "Эти ссылки показываются в разделе «Информация»."
+    )
+    kb = ikb(
+        [btn("📢 Канал", "a:set:in:support_channel")],
+        [btn("💬 Чат", "a:set:in:support_chat")],
+        [btn("👑 Админ", "a:set:in:support_admin")],
+        [btn("⬅️ Назад", "a:g:settings")],
+    )
+    await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    await cb.answer()

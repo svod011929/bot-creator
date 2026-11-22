@@ -76,8 +76,11 @@ HELP = (
 
 
 def contact_buttons(ctx: Ctx) -> tuple[list, str]:
-    chat, channel, admin = (support_url(ctx.cfg.chat_url), support_url(ctx.cfg.channel_url),
-                            support_url(ctx.cfg.admin_url))
+    def _u(key: str, fallback: str) -> str:
+        return support_url(ctx.db.kv_get(key) or fallback)
+    chat = _u("support_chat", ctx.cfg.chat_url)
+    channel = _u("support_channel", ctx.cfg.channel_url)
+    admin = _u("support_admin", ctx.cfg.admin_url)
     links = [url_btn(t, u) for t, u in (("💬 Чат", chat), ("📢 Канал", channel)) if u]
     return links, admin
 
