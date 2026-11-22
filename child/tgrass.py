@@ -61,9 +61,20 @@ class TGrassGate:
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
         self._pass_until: dict[int, float] = {}
+        self._pass_limit = 5000
         with db.lock:
             db.conn.executescript(SCHEMA)
             _migrate_schema(db)
+
+
+    def _remember_pass(self, uid: int, until: float) -> None:
+        if len(self._pass_until) >= self._pass_limit:
+            now = time.time()
+            self._pass_until = {k: v for k, v in self._pass_until.items() if v > now}
+            if len(self._pass_until) >= self._pass_limit:
+                items = sorted(self._pass_until.items(), key=lambda kv: kv[1])
+                self._pass_until = dict(items[-(self._pass_limit - 1):])
+        self._pass_until[uid] = until
 
     async def _post(self, path: str, body: dict) -> tuple[dict | None, int, int]:
         """(data|None, http_status, duration_ms). Успешный done-лог — на стороне вызывающего."""
@@ -154,7 +165,7 @@ class TGrassGate:
             return None
         data, http_status, ms = await self._post("/offers", self.user_body(u))
         if data is None:
-            self._pass_until[u.id] = now + ERROR_TTL
+            self._remember_pass(u.id, now + ERROR_TTL)
             return None
         if reset:
             _clear_reset(self.db, int(u.id), "tgrass")
@@ -179,13 +190,13 @@ class TGrassGate:
                 result = "show_gate"
             else:
                 result = "pass"
-                self._pass_until[u.id] = now + PASS_TTL
+                self._remember_pass(u.id, now + PASS_TTL)
         elif api_status == "no_offers":
             result = "no_tasks"
-            self._pass_until[u.id] = now + NO_OFFERS_TTL
+            self._remember_pass(u.id, now + NO_OFFERS_TTL)
         else:
             result = "pass"
-            self._pass_until[u.id] = now + PASS_TTL
+            self._remember_pass(u.id, now + PASS_TTL)
         slog.log_done(
             log, _NET, "/offers", http_status=http_status, duration_ms=ms, tasks=len(offers),
             statuses=slog.status_counts(offer_statuses), result=result,
