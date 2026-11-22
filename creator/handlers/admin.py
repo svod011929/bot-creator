@@ -36,7 +36,7 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
-def panel_kb(ctx: Ctx | None = None):
+def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
     row = [btn("🤖 Боты", "a:bots")]
     if ctx is not None and ctx.tgrass is not None:
         row.append(btn("💸 TGrass", "a:tg"))
@@ -44,7 +44,9 @@ def panel_kb(ctx: Ctx | None = None):
         row.append(btn("🚀 PiarFlow", "a:pf"))
     return ikb([btn("📊 Статистика", "a:stats"), btn("💰 Цены", "a:prices")],
                [btn("📢 Рассылка", "a:bc"), btn("👤 Пользователи", "a:users")],
-               row, [btn("🔎 Найти бота", "a:botfind")], [btn("📡 Источники ОП", "src:home")])
+               row, [btn("🔎 Найти бота", "a:botfind")], [btn("📡 Источники ОП", "src:home")],
+               *([[btn("💸 Заявки на вывод", "a:wd:0")]] if ctx is not None and uid is not None
+                 and uid == ctx.cfg.approver else []))
 
 
 def panel_text(ctx: Ctx) -> str:
@@ -66,14 +68,14 @@ async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(message.from_user.id, None)
     await state.clear()
     await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
-                         reply_markup=panel_kb(ctx))
+                         reply_markup=panel_kb(ctx, message.from_user.id))
 
 
 @router.callback_query(F.data == "a:main")
 async def panel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     ctx.source_inputs.pop(cb.from_user.id, None)
     await state.clear()
-    await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx))
+    await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx, cb.from_user.id))
     await cb.answer()
 
 

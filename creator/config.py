@@ -27,10 +27,13 @@ PRICE_KEYS = {
     # PiarFlow (Доп заработок)
     "PIARFLOW_REWARD": "PiarFlow: награда владельцу за 1 задание, ₽",
     "PIARFLOW_MIN_USERS": "PiarFlow: минимум пользователей в боте",
+    # Вывод заработанного
+    "WITHDRAW_MIN": "Вывод: минимальная сумма, ₽",
+    "WITHDRAW_FEE_PERCENT": "Вывод: комиссия, %",
 }
 
 MONEY_KEYS = frozenset({"PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "HOSTING_DAY_PRICE", "VIP_PRICE",
-                        "TGRASS_REWARD", "PIARFLOW_REWARD"})
+                        "TGRASS_REWARD", "PIARFLOW_REWARD", "WITHDRAW_MIN"})
 
 PRICE_DEFAULTS = {
     "PRICE_CLICKER": 22500,      # 225 ₽
@@ -46,6 +49,8 @@ PRICE_DEFAULTS = {
     "TGRASS_MIN_USERS": 50,
     "PIARFLOW_REWARD": 50,       # 0,50 ₽ за засчитанное задание
     "PIARFLOW_MIN_USERS": 50,
+    "WITHDRAW_MIN": 10000,       # 100 ₽
+    "WITHDRAW_FEE_PERCENT": 5,
 }
 
 
@@ -77,6 +82,8 @@ class Config:
     chat_url: str = ""
     channel_url: str = ""
     admin_url: str = ""
+    withdraw_approver_id: int = 0   # 0 = not set: falls back to the only ADMIN_IDS entry
+    withdraw_methods: tuple[str, ...] = ("card", "sbp", "usdt_trc20")
     data_dir: Path = PROJECT_ROOT / "data"
     launch_date: str = ""
     log_level: str = "INFO"
@@ -94,6 +101,13 @@ class Config:
     piarflow_base_url: str = "https://piarflow.com/v1"
     piarflow_hub_api_key: str = ""  # API key хаб-бота для режима «трансляция» (или data/piarflow_hub.json)
     tgrass_hub_api_key: str = ""    # auth_token хаб-бота TGrass для «трансляции» (или data/tgrass_hub.json)
+
+    @property
+    def approver(self) -> int | None:
+        """Single designated withdrawal approver: WITHDRAW_APPROVER_ID, else the only admin, else unconfigured."""
+        if self.withdraw_approver_id:
+            return self.withdraw_approver_id
+        return next(iter(self.admin_ids)) if len(self.admin_ids) == 1 else None
 
     @property
     def piarflow_enabled(self) -> bool:
@@ -139,6 +153,15 @@ def _support_env(name: str) -> str:
     return url
 
 
+WITHDRAW_METHODS = ("card", "sbp", "usdt_trc20")
+
+
+def _withdraw_methods() -> tuple[str, ...]:
+    raw = os.environ.get("WITHDRAW_METHODS", "").replace(" ", "").lower()
+    chosen = tuple(m for m in WITHDRAW_METHODS if m in raw.split(","))
+    return chosen or WITHDRAW_METHODS
+
+
 def load_config(env_file: Path | None = None) -> Config:
     load_dotenv(env_file or PROJECT_ROOT / ".env")
     admin_ids = {
@@ -153,6 +176,8 @@ def load_config(env_file: Path | None = None) -> Config:
         chat_url=_support_env("CHAT_URL"),
         channel_url=_support_env("CHANNEL_URL"),
         admin_url=_support_env("ADMIN_URL"),
+        withdraw_approver_id=_int("WITHDRAW_APPROVER_ID", 0),
+        withdraw_methods=_withdraw_methods(),
         data_dir=data_dir,
         launch_date=os.environ.get("LAUNCH_DATE", "").strip(),
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip() or "INFO",

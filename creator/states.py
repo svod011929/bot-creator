@@ -29,3 +29,10 @@ class Admin(StatesGroup):
 
 class BotList(StatesGroup):
     search = State()
+
+
+class Withdraw(StatesGroup):
+    details = State()
+    amount = State()
+    confirm = State()
+    reason = State()  # approver: optional reject reason

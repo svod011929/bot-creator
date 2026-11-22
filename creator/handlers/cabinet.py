@@ -19,6 +19,7 @@ KIND_TEXT = {
     "topup": "Пополнение", "create": "Создание бота", "hosting": "Хостинг", "vip": "VIP", "ref": "Партнёрские",
     "resale_buy": "Покупка бота", "resale_sell": "Продажа бота", "refund": "Возврат", "admin": "Корректировка",
     "tgrass": "TGrass ОП", "piarflow": "PiarFlow задания",
+    "withdraw": "Вывод заработанного", "withdraw_refund": "Возврат по заявке на вывод",
 }
 
 
@@ -36,7 +37,8 @@ def cabinet_text(ctx: Ctx, uid: int) -> str:
 
 
 def cabinet_kb():
-    return ikb([btn("➕ Пополнить баланс", "cab:topup")], [btn("📜 История операций", "cab:history")])
+    return ikb([btn("➕ Пополнить баланс", "cab:topup")], [btn("💸 Вывести заработанное", "cab:wd")],
+               [btn("📄 Мои заявки на вывод", "cab:wdl:0")], [btn("📜 История операций", "cab:history")])
 
 
 @router.message(F.text == BTN_CABINET)
