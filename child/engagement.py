@@ -25,6 +25,10 @@ EVENTS = COMMON | {
     "team_join",
     "team_checkin",
     "team_claim",
+    "track_join",
+    "track_step",
+    "track_complete",
+    "track_claim",
     "onboard",
     "quiz",
     "link",
@@ -58,6 +62,10 @@ STEPS = {
         ("card_open", "Открыли карточку"),
         ("card_complete", "Верно прошли карточку"),
         ("constellation", "Собрали созвездие"),
+        ("track_join", "Начали тематический маршрут"),
+        ("track_step", "Прошли этап маршрута"),
+        ("track_complete", "Завершили маршрут"),
+        ("track_claim", "Получили значок маршрута"),
     ),
 }
 SCHEMA = """

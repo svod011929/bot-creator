@@ -139,6 +139,8 @@ def group_settings(info, group: str):
 
 
 def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    from creator.presentation import callback as presentation_callback
+
     info = templates.info(row["template"])
     snap = load_snapshot(ctx, row)
     heading = "Первый запуск" if action == "ready" else "Настройки бота"
@@ -180,6 +182,8 @@ def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, Inlin
             rows.append([btn("Все настройки", callback(row, "settings"))])
         else:
             rows.append([btn("Первый запуск", callback(row, "ready"))])
+    if snap.editable:
+        rows.append([btn("🎨 Сценарий и оформление", presentation_callback(row["id"], "home"))])
     rows.append([btn("⬅️ К карточке", callback(row, "card"))])
     text = "\n".join(lines)
     visible = html.unescape(re.sub(r"</?b>", "", text))
