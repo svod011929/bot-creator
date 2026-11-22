@@ -20,6 +20,8 @@ EVENTS = COMMON | {
     "expedition_start",
     "expedition_complete",
     "skill",
+    "event_join",
+    "event_claim",
     "onboard",
     "quiz",
     "link",
@@ -36,6 +38,8 @@ STEPS = {
         ("tap", "Успешный клик"),
         ("expedition_start", "Начали экспедицию"),
         ("expedition_complete", "Завершили экспедицию"),
+        ("event_join", "Вступили в событие"),
+        ("event_claim", "Забрали награду события"),
     ),
     "refbot": (
         ("access", "Подтверждённый допуск"),
