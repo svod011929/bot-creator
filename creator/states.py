@@ -22,6 +22,7 @@ class Info(StatesGroup):
 class Admin(StatesGroup):
     price = State()
     broadcast = State()
+    broadcast_bots = State()
     user_lookup = State()
     user_balance = State()
     bot_lookup = State()
