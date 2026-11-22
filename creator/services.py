@@ -236,7 +236,11 @@ class Ctx:
                 self.db.change_balance(uid, amount, "refund", "Возврат: черновик уже использован")
                 return "⚠️ Этот заказ уже был оплачен ранее — сумма зачислена на ваш баланс."
             self.db.enqueue_runtime(f"create:{draft_id}", bot_id, "start")
-            return f"✅ Оплата получена! Бот ID {bot_id} создан и запускается. Откройте «🤖 Мои боты»."
+            return (
+                f"✅ Оплата получена! Бот ID {bot_id} создан и запускается.\n\n"
+                "Откройте «🤖 Мои боты» → карточку бота → «📋 Первый запуск» для инструкции.\n"
+                "Там же можно настроить оформление и контент."
+            )
         if kind == "host":
             bot_id = int(rest[0])
             b = self.db.bot(bot_id)

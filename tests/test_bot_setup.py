@@ -62,10 +62,10 @@ async def test_card_entry_and_readiness_defaults(setup):
     w.session.clear()
     await w.feed(cb_update(OWNER, w.cb("ready")))
     text = screen(w).text
-    assert "Первый запуск" in text and "по супервизору" in text
-    assert "не запущен" in text and "соответствует записи" in text
+    assert "Первый запуск" in text and "Чек-лист первого запуска" in text
+    assert "не запущен" in text and "в порядке" in text
     assert "по умолчанию" in text and "выключен (необязательно)" in text
-    assert "не проверка ответа Telegram" in text
+    assert "обзор состояния и настроек" in text
     assert TOKEN not in text
     assert any(b.url == "https://t.me/fixture_bot" for b in buttons(screen(w)))
     currency = templates.info(w.template).defaults()["currency"]
@@ -119,7 +119,7 @@ async def test_config_identity_mismatch_suppresses_settings(setup, field, value)
     (w.path / "settings.json").write_text(json.dumps({"welcome": "PRIVATE_GREETING"}))
     await w.feed(cb_update(OWNER, w.cb("ready")))
     text = screen(w).text
-    assert "не подтверждена" in text
+    assert "требует внимания" in text
     assert "PRIVATE_GREETING" not in text and "OTHER_SECRET" not in text
 
 
@@ -150,7 +150,7 @@ async def test_unsafe_username_never_becomes_link(setup, username):
     w.ctx.sup.write_files(w.id)
     await w.feed(cb_update(OWNER, w.cb("ready")))
     assert not any(b.url for b in buttons(screen(w)))
-    assert "Ссылка: недоступна" in screen(w).text
+    assert "Ссылка на бота: пока недоступна" in screen(w).text
 
 
 async def test_process_and_database_status_are_distinct_facts(setup, monkeypatch):
@@ -159,9 +159,9 @@ async def test_process_and_database_status_are_distinct_facts(setup, monkeypatch
     monkeypatch.setattr(w.ctx.sup, "is_running", lambda i: True)
     await w.feed(cb_update(OWNER, w.cb("ready")))
     text = screen(w).text
-    assert "Процесс: запущен (по супервизору)" in text
-    assert "Запись состояния: ошибка" in text
-    assert "не проверка ответа Telegram" in text
+    assert "1. Процесс: запущен" in text
+    assert "2. Состояние: ошибка" in text
+    assert "обзор состояния и настроек" in text
 
 
 @pytest.mark.parametrize("action", ["ready", "settings", "group:appearance", "group:rules", "edit:welcome", "channel", "card"])
