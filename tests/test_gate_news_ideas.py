@@ -5,7 +5,7 @@ import asyncio
 import sys
 
 import pytest
-from aiogram.methods import CopyMessage, GetChatMember, SendMessage
+from aiogram.methods import CopyMessage, EditMessageText, GetChatMember, SendMessage
 
 from creator.app import build_dispatcher
 from creator.config import Config
@@ -88,6 +88,7 @@ async def test_gate_skips_admin_start_and_docs(env):
 
 async def test_gate_blocks_user_until_subscribed(env):
     ctx, feed, session = env
+    ctx.db.kv_set("gate_enabled", "1")
     session.member_status = "left"
     await feed(msg_update(OWNER, BTN_INFO))
     assert any("Подпишитесь" in (t or "") for t in session.texts())
@@ -227,6 +228,7 @@ async def bound_invite_env(tmp_path, bot, session):
 
 async def test_gate_blocks_when_invite_has_chat_id(bound_invite_env):
     ctx, feed, session = bound_invite_env
+    ctx.db.kv_set("gate_enabled", "1")
     session.member_status = "left"
     await feed(msg_update(OWNER, BTN_INFO))
     assert any("Подпишитесь" in (t or "") for t in session.texts())
@@ -257,6 +259,15 @@ async def test_admin_forward_binds_ids_and_enables_gate(invite_env):
 
     session.clear()
     await feed(msg_update(OWNER, BTN_INFO))
+    last = session.of(SendMessage)[-1]
+    labels = [b.text for row in last.reply_markup.inline_keyboard for b in row]
+    assert "📄 Документы" in labels
+    assert not any("Подпишитесь" in (t or "") for t in session.texts())
+    assert not session.of(GetChatMember)
+
+    ctx.db.kv_set("gate_enabled", "1")
+    session.clear()
+    await feed(msg_update(OWNER, BTN_INFO))
     assert any("Подпишитесь" in (t or "") for t in session.texts())
     assert {-100333, -100444} == {m.chat_id for m in session.of(GetChatMember)}
 
@@ -270,3 +281,99 @@ async def test_news_preview_uses_bound_channel_id(invite_env):
     await feed(msg_update(ADMIN, "Новость в частный канал"))
     assert any("в бот и в канал" in (t or "") for t in session.texts())
     assert not session.of(CopyMessage)
+
+
+async def test_gate_stays_off_by_default_even_with_public_urls(env):
+    ctx, feed, session = env
+    session.member_status = "left"
+    await feed(msg_update(OWNER, BTN_INFO))
+    last = session.of(SendMessage)[-1]
+    labels = [b.text for row in last.reply_markup.inline_keyboard for b in row]
+    assert "📄 Документы" in labels
+    assert not any("Подпишитесь" in (t or "") for t in session.texts())
+    assert not session.of(GetChatMember)
+
+
+async def test_admin_can_enable_gate_and_change_contacts(env):
+    ctx, feed, session = env
+    session.member_status = "left"
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:set:gate"))
+    assert any("выключена" in (t or "") for t in session.texts())
+    await feed(cb_update(ADMIN, "a:set:gate_toggle"))
+    assert ctx.db.kv_get("gate_enabled") == "1"
+    actions = [r["action"] + ":" + r["target"] for r in ctx.db.admin_actions()]
+    assert "settings:gate_enabled" in actions
+
+    session.clear()
+    await feed(msg_update(OWNER, BTN_INFO))
+    assert any("Подпишитесь" in (t or "") for t in session.texts())
+
+    await feed(cb_update(ADMIN, "a:set:in:support_channel"))
+    await feed(msg_update(ADMIN, "https://t.me/supportchan"))
+    assert ctx.db.kv_get("support_channel") == "https://t.me/supportchan"
+    session.clear()
+    session.member_status = "member"
+    await feed(msg_update(OWNER, BTN_INFO))
+    last = [m for m in session.of(SendMessage) if m.reply_markup][-1]
+    urls = [b.url for row in last.reply_markup.inline_keyboard for b in row if getattr(b, "url", None)]
+    assert "https://t.me/supportchan" in urls
+
+
+async def test_idea_reward_default_and_custom_amount(env):
+    from creator.handlers.ideas import REWARD_KOP, idea_reward_kop
+    ctx, feed, session = env
+    assert idea_reward_kop(ctx) == REWARD_KOP
+    await feed(msg_update(OWNER, "/start"))
+    iid = ctx.db.idea_add(OWNER, "Сделать экспорт статистики в CSV файл")
+    session.clear()
+    await feed(cb_update(ADMIN, "a:set:reward"))
+    assert any("50 ₽" in (t or "") for t in session.texts())
+    await feed(cb_update(ADMIN, "a:set:in:idea_reward_kop"))
+    await feed(msg_update(ADMIN, "100"))
+    assert idea_reward_kop(ctx) == 10000
+    assert any(r["action"] == "settings" and r["target"] == "idea_reward_kop" and "10000" in (r["detail"] or "")
+               for r in ctx.db.admin_actions())
+    session.clear()
+    await feed(cb_update(ADMIN, f"a:ideaok:{iid}"))
+    assert ctx.db.user(OWNER)["balance"] == 10000
+    assert any("100 ₽" in (m.text or "") and m.chat_id == OWNER for m in session.of(SendMessage))
+
+    # invalid values do not change the reward
+    await feed(cb_update(ADMIN, "a:set:in:idea_reward_kop"))
+    await feed(msg_update(ADMIN, "-10"))
+    await feed(cb_update(ADMIN, "a:set:in:idea_reward_kop"))
+    await feed(msg_update(ADMIN, "999999"))
+    await feed(cb_update(ADMIN, "a:set:in:idea_reward_kop"))
+    await feed(msg_update(ADMIN, "abc"))
+    assert idea_reward_kop(ctx) == 10000
+
+
+async def test_non_admin_cannot_change_settings_or_prices(env):
+    ctx, feed, session = env
+    await feed(msg_update(OWNER, "/start"))
+    await feed(cb_update(OWNER, "a:prices"))
+    await feed(cb_update(OWNER, "a:set:gate"))
+    await feed(cb_update(OWNER, "a:set:gate_toggle"))
+    await feed(cb_update(OWNER, "a:set:reward"))
+    await feed(cb_update(OWNER, "a:set:in:idea_reward_kop"))
+    await feed(msg_update(OWNER, "1"))
+    await feed(cb_update(OWNER, "a:set:contacts"))
+    assert ctx.db.kv_get("gate_enabled") is None
+    assert ctx.db.kv_get("idea_reward_kop") is None
+    assert not ctx.db.admin_actions()
+    assert not any("Цены и тарифы" in (t or "") or "Награда за идеи" in (t or "")
+                   or "Контакты поддержки" in (t or "") or "Обязательная подписка" in (t or "")
+                   for t in session.texts())
+
+
+async def test_prices_screen_is_grouped(env):
+    ctx, feed, session = env
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:prices"))
+    assert any("Цены и тарифы" in (t or "") for t in session.texts())
+    last = session.of(EditMessageText)[-1]
+    labels = [b.text for row in last.reply_markup.inline_keyboard for b in row]
+    assert any(t.startswith("— Шаблоны —") for t in labels)
+    assert any(t.startswith("— Хостинг и VIP —") for t in labels)
+    assert any("Кликер" in t for t in labels)

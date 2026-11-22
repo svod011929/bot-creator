@@ -59,18 +59,29 @@ def _link(url: str) -> str:
     return support_url(url) or (url or "").strip()
 
 
+def setting(ctx: Ctx, key: str, fallback: str = "") -> str:
+    value = ctx.db.kv_get(key)
+    return value if value not in (None, "") else (fallback or "")
+
+
+def gate_is_on(ctx: Ctx) -> bool:
+    """Выключена, пока админ явно не включит её в «Настройках»."""
+    return ctx.db.kv_get("gate_enabled") == "1"
+
+
 def _bound_id(ctx: Ctx, kind: str) -> int:
     cfg_val = ctx.cfg.channel_chat_id if kind == "channel" else ctx.cfg.chat_chat_id
     kv_key = "gate_channel_id" if kind == "channel" else "gate_chat_id"
     try:
-        return int(cfg_val or ctx.db.kv_get(kv_key) or 0)
+        return int(setting(ctx, kv_key, str(cfg_val or 0)) or 0)
     except (TypeError, ValueError):
         return 0
 
 
 def channel_dest(ctx: Ctx) -> str | int | None:
     """Публичный @username канала или числовой id, если частная ссылка уже привязана."""
-    name = _public_username(ctx.cfg.channel_url)
+    url = setting(ctx, "gate_channel_url", ctx.cfg.channel_url)
+    name = _public_username(url)
     if name:
         return name
     cid = _bound_id(ctx, "channel")
@@ -88,12 +99,14 @@ async def _is_member(bot: Bot, chat: str | int, user_id: int) -> bool:
 
 def _targets(ctx: Ctx) -> list[dict]:
     """Цели: title, link (для кнопки), check (username или chat_id)."""
+    if not gate_is_on(ctx):
+        return []
     out: list[dict] = []
-    for title, url, kind in (
-        ("📢 Канал новостей", ctx.cfg.channel_url, "channel"),
-        ("💬 Чат конструктора", ctx.cfg.chat_url, "chat"),
+    for title, kind, url_key, fallback in (
+        ("📢 Канал новостей", "channel", "gate_channel_url", ctx.cfg.channel_url),
+        ("💬 Чат конструктора", "chat", "gate_chat_url", ctx.cfg.chat_url),
     ):
-        link = _link(url)
+        link = _link(setting(ctx, url_key, fallback))
         if not link:
             continue
         check = _public_username(link) or _bound_id(ctx, kind) or None
@@ -185,8 +198,9 @@ async def bind_private(message: Message, ctx: Ctx) -> None:
         return
     key = "gate_channel_id" if chat.type == "channel" else "gate_chat_id"
     ctx.db.kv_set(key, str(chat.id))
+    ctx.db.log_admin(message.from_user.id, "settings", target=key, detail=f"new={chat.id}")
     await message.answer(
         f"✅ Привязано: {chat.type} <code>{chat.id}</code> ({html.escape(chat.title or '')}).\n"
-        "Теперь частная ссылка в CHANNEL_URL / CHAT_URL будет проверяться по этому ID.",
+        "Чтобы обязательная подписка заработала, включите её в «⚙️ Настройки».",
         disable_web_page_preview=True,
     )

@@ -367,7 +367,8 @@ async def test_admin_panel_has_submenus_with_all_buttons(env):  # noqa: F811
     assert "a:users" not in top and "a:g:people" in top and "a:stats" in top
     inner = {b.callback_data for rows in _group_rows(ctx, ADMIN).values() for r in rows for b in r}
     needed = ("a:users", "a:bots", "a:botfind", "a:bc", "a:bcb", "a:news",
-              "a:prices", "a:lave:0", "a:alog:0", "src:home", "a:ideas")
+              "a:prices", "a:lave:0", "a:alog:0", "src:home", "a:ideas",
+              "a:set:gate", "a:set:reward", "a:set:contacts")
     for need in needed:
         assert need in inner
     await feed(msg_update(ADMIN, "/admin"))

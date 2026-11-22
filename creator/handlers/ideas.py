@@ -9,11 +9,23 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from creator.keyboards import btn, cancel_kb, ikb
+from creator.money import rub
 from creator.services import Ctx
 
 router = Router(name="ideas")
 
-REWARD_KOP = 5000  # 50 ₽ за принятую идею
+REWARD_KOP = 5000  # значение по умолчанию: 50 ₽
+IDEA_REWARD_MAX_KOP = 1_000_000  # 10 000 ₽
+
+
+def idea_reward_kop(ctx: Ctx) -> int:
+    """Текущая награда в копейках; без настройки — 50 ₽, не выше безопасного максимума."""
+    raw = ctx.db.kv_get("idea_reward_kop")
+    try:
+        value = int(raw) if raw not in (None, "") else REWARD_KOP
+    except (TypeError, ValueError):
+        value = REWARD_KOP
+    return max(0, min(value, IDEA_REWARD_MAX_KOP))
 
 
 class IdeaForm(StatesGroup):
@@ -45,11 +57,12 @@ async def ideas_home(event: Message | CallbackQuery, ctx: Ctx) -> None:
 
 
 @router.callback_query(F.data == "ideas:new")
-async def ideas_new(cb: CallbackQuery, state: FSMContext) -> None:
+async def ideas_new(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     await state.set_state(IdeaForm.text)
+    reward = idea_reward_kop(ctx)
+    extra = f"\nЗа принятую идею начисляется {rub(reward)} на баланс." if reward else ""
     await cb.message.answer(
-        "Опишите идею одним сообщением (до 1000 символов).\n"
-        "За принятую идею начисляется 50 ₽ на баланс.",
+        "Опишите идею одним сообщением (до 1000 символов)." + extra,
         reply_markup=cancel_kb(),
         disable_web_page_preview=True,
     )
@@ -64,10 +77,11 @@ async def ideas_save(message: Message, state: FSMContext, ctx: Ctx) -> None:
         await message.answer("Слишком коротко. Опишите подробнее.")
         return
     iid = ctx.db.idea_add(message.from_user.id, text)
+    reward = idea_reward_kop(ctx)
+    bonus = f" Если идея будет принята — вы получите {rub(reward)} на баланс." if reward else ""
     await message.answer(
         f"✅ Идея #{iid} сохранена!\n\n"
-        "Другие пользователи смогут за неё голосовать. "
-        "Если идея будет принята — вы получите 50 ₽ на баланс.",
+        "Другие пользователи смогут за неё голосовать." + bonus,
         reply_markup=ikb([btn("💡 К идеям", "ideas")]),
         disable_web_page_preview=True,
     )
