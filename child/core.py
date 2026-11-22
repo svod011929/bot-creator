@@ -26,6 +26,7 @@ from aiogram.types import (
 
 from child import templates
 from child.db import ChildDB, fmt
+from child.engagement import Engagement, private_observation
 from child.files import read_config, read_settings, write_setting
 from child.piarflow import CHECK_CB as PF_CHECK_CB
 from child.piarflow import PiarFlowGate
@@ -48,6 +49,14 @@ class ChildApp:
         self.template = templates.load(self.cfg["template"])
         self.info: templates.TemplateInfo = self.template.INFO
         self.db = ChildDB(self.dir / "bot.db")
+
+        def analytics_owner(uid):
+            current = read_config(self.dir)
+            if not isinstance(current, dict) or type(current.get("owner_id")) is not int:
+                raise ValueError("Owner unavailable")
+            return current["owner_id"] == uid
+
+        self.engagement = Engagement(self.db, owner_check=analytics_owner)
         self.game = self.template.create_game(self.db) if hasattr(self.template, "create_game") else None
         self.club = self.template.create_club(self) if hasattr(self.template, "create_club") else None
         self.sky = self.template.create_journey(self) if hasattr(self.template, "create_journey") else None
@@ -184,6 +193,11 @@ class GateMiddleware(BaseMiddleware):
             return None
         result = await self.app.gate_result(bot, user.id)
         if result.allowed:
+            message = event.message if isinstance(event, CallbackQuery) else event
+            if isinstance(message, Message) and not user.is_bot:
+                private_observation(self.app, message, user.id, "interaction")
+                if result.confirmed:
+                    private_observation(self.app, message, user.id, "access")
             return await handler(event, data)
         if isinstance(event, CallbackQuery):
             await event.answer(result.text, show_alert=True)
@@ -247,6 +261,7 @@ def build_core_router(app: ChildApp) -> Router:
                             f"🎉 По вашей ссылке пришёл новый пользователь! +{fmt(reward)} {app.currency}")
         if hasattr(app.template, "on_access_confirmed"):
             app.template.on_access_confirmed(app, uid)
+        private_observation(app, message, uid, "access")
         text = html.escape(str(app.s.get("welcome", "Добро пожаловать!"))) + app.footer()
         await message.answer(text, reply_markup=app.menu(uid))
 
@@ -265,12 +280,14 @@ def build_core_router(app: ChildApp) -> Router:
         if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
             app.template.pause_forms(app, u.id)
         if hasattr(app.template, "start_user"):
-            app.template.start_user(app, u, command.args or "", private=message.chat.type == "private")
+            fresh = app.template.start_user(app, u, command.args or "", private=message.chat.type == "private")
         else:
             ref = None
             if command.args and command.args.startswith("r") and command.args[1:].isdigit():
                 ref = int(command.args[1:])
-            app.db.upsert_user(u.id, u.username, u.full_name, ref)
+            fresh = app.db.upsert_user(u.id, u.username, u.full_name, ref)
+        if not u.is_bot:
+            private_observation(app, message, u.id, "start", registered=fresh)
         tg_kb = await app.tgrass_gate(u)
         if tg_kb is not None:
             await message.answer(TG_TEXT, reply_markup=tg_kb)

@@ -3,6 +3,15 @@
 Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
 Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
 
+## Stage 6 demos and participant analytics
+
+Template creation cards now link to the owner's demo bots. Owners can open a local activity
+report: unique active accounts, template milestones and closed-day D1/D7 returns. Collection
+starts with this version, excludes the owner and group chats, stores no message texts or
+amounts, and never changes wallets, rewards or withdrawals. A recording error does not cancel
+gameplay. See `STAGE6_CHANGES.md` and `docs/DEMOS_AND_ENGAGEMENT.md`. Stacked on deployed
+`f9fac10` and keeps the Stage 1 post-review fixes.
+
 ## Stage 5 Creator content
 
 Owners can manage referral-club campaigns and star-journey cards from the constructor:

@@ -5,10 +5,12 @@ import html
 import re
 
 from child import templates
+from creator.keyboards import btn, ikb, url_btn
 from creator.money import rub
 from creator.services import Ctx
 
 CONDITIONS_UNAVAILABLE = "Условия временно недоступны. Откройте выбор шаблона позже."
+DEMO_BOTS = {"clicker": "DDDClickerBot", "refbot": "DDDReferallBot", "starbot": "DDDFreeStarsBot"}
 COMPARISON_HEADING = (
     "Выберите шаблон бота. Сравните возможности и стоимость, затем нажмите нужный вариант — "
     "откроется описание с инструкцией по токену"
@@ -86,5 +88,10 @@ def detail_text(ctx: Ctx, key: str) -> str:
     price = _nonnegative(ctx.template_price(key))
     return _bounded(
         f"{html.escape(t.emoji)} <b>{html.escape(t.title)}</b>\n\n{html.escape(t.description)}\n\n"
+        f"👀 Демо: @{DEMO_BOTS[key]}\nПосмотрите готовый пример перед созданием своего бота.\n\n"
         f"💰 Стоимость: <b>{html.escape(rub(price))}</b>\n{_hosting_text(ctx)}\n\n{TOKEN_INSTRUCTION}"
     )
+
+
+def detail_kb(key: str):
+    return ikb([url_btn("👀 Открыть демо", "https://t.me/" + DEMO_BOTS[key])], [btn("⬅️ Назад", "create")])

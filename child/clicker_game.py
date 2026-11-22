@@ -8,6 +8,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from child.db import ChildDB
+from child.engagement import observe
 
 GAME_TZ = ZoneInfo("Europe/Moscow")
 ENERGY_MAX = 5
@@ -217,6 +218,7 @@ class ClickerGame:
                      today, streak, max(streak, p["best_streak"]), uid)
 
     def _record(self, uid: int, metric: str, at: int) -> None:
+        observe(self.db, uid, {"taps": "tap", "expeditions": "expedition_complete", "skills": "skill"}[metric])
         column = {"taps": "taps_total", "expeditions": "expeditions_total", "skills": "skills_total"}[metric]
         self.db.exec(f"UPDATE clicker_profiles SET {column}={column}+1 WHERE user_id=?", uid)
         for scope in ("day", "week"):
@@ -224,6 +226,8 @@ class ClickerGame:
         self._activity(uid, at)
 
     def _award(self, uid: int, xp: int, kind: str, key: str, at: int) -> None:
+        if kind == "mission":
+            observe(self.db, uid, "mission")
         self.db.exec("INSERT INTO clicker_xp_entries(user_id,delta,kind,source_key,created_at) VALUES(?,?,?,?,?)",
                      uid, xp, kind, key, at)
         self.db.exec("UPDATE clicker_profiles SET xp_total=xp_total+?,xp_available=xp_available+?,version=version+1 "
@@ -381,6 +385,7 @@ class ClickerGame:
                                "VALUES(?,?,?,?,?,?,?)", uid, key, at, at + duration, xp, route.energy, route.item)
             self._activity(uid, at)
             self._badges(uid, at)
+            observe(self.db, uid, "expedition_start")
             return dict(self.db.one("SELECT * FROM clicker_expeditions WHERE id=?", cur.lastrowid))
 
     def claim_expedition(self, uid: int, trip_id: int) -> dict:

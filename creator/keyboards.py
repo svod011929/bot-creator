@@ -57,13 +57,15 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
     i = b["id"]
     running = b["desired"] and b["status"] in ("running", "restarting")
     from creator.content import callback
+    from creator.engagement import request as activity_request
 
     return ikb(
         [btn("⏹ Остановить", f"b:{i}:stop") if running else btn("▶️ Запустить", f"b:{i}:start")],
         [btn("🔄 Перезапустить", f"b:{i}:restart")] if running else [],
         [btn("💳 Хостинг", f"b:{i}:host"), btn("👑 VIP", f"b:{i}:vip")],
         [btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready"), btn("📊 Статистика", f"bst:{i}")],
-        [btn("📚 Контент бота", callback(b, "home"))] if b['template'] in {"refbot", "starbot"} else [],
+        [btn("📈 Активность", activity_request(i))]
+        + ([btn("📚 Контент бота", callback(b, "home"))] if b['template'] in {"refbot", "starbot"} else []),
         [btn("⚙️ Настройки", f"b:{i}:set"),
          btn("🚫 Снять с продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
         [btn("💸 Доп заработок", f"b:{i}:tg")] if tgrass else [],

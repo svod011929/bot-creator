@@ -55,7 +55,9 @@ async def test_card_has_stats_button_and_screen_definitions(env):  # noqa: F811
     assert "на рассмотрении 2" in t and "отмечено выплаченными 1" in t and "отклонено 1" in t
     assert "Не измеряется" in t and "u1" not in t and len(t) < 4096
     kb = [(b.text, b.callback_data) for r in m.reply_markup.inline_keyboard for b in r]
-    assert kb == [("🔄 Обновить", f"bst:{bot_id}"), ("⬅️ К боту", f"b:{bot_id}:open")]
+    from creator.engagement import request
+    assert kb == [("📈 Активность и возвращения", request(bot_id)),
+                  ("🔄 Обновить", f"bst:{bot_id}"), ("⬅️ К боту", f"b:{bot_id}:open")]
     assert digest(path) == before and digest(ctx.cfg.db_path) == creator_before
 
 

@@ -164,7 +164,11 @@ async def test_detail_has_current_conditions_and_existing_token_step(selection, 
     assert "на 0 дн." not in text
     assert "По текущему тарифу ежесуточная плата за хостинг не взимается" in text
     assert "@BotFather" in text and "/newbot" in text
-    assert message.reply_markup.inline_keyboard[0][0].callback_data == "create"
+    demos = {"clicker": "DDDClickerBot", "refbot": "DDDReferallBot", "starbot": "DDDFreeStarsBot"}
+    assert f"Демо: @{demos[key]}" in text
+    assert message.reply_markup.inline_keyboard[0][0].text == "👀 Открыть демо"
+    assert message.reply_markup.inline_keyboard[0][0].url == f"https://t.me/{demos[key]}"
+    assert message.reply_markup.inline_keyboard[1][0].callback_data == "create"
     assert await state.get_state() == CreateBot.token.state
     assert await state.get_data() == {"template": key}
 
