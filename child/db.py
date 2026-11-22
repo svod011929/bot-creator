@@ -89,6 +89,7 @@ class ChildDB:
             self._migrate_withdrawals()
             self._ensure_banned_column()
             self._ensure_owner_actions()
+            self._ensure_microtasks()
         except BaseException:
             self.conn.close()
             raise
@@ -265,6 +266,43 @@ class ChildDB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(users)")}
         if "banned" not in cols:
             self.conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
+
+    def _ensure_microtasks(self) -> None:
+        """Additive tables for the microtasks template. Harmless on other templates."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS micro_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    reward REAL NOT NULL,
+                    proof_types TEXT NOT NULL,
+                    approval_mode TEXT NOT NULL,
+                    repeat_mode TEXT NOT NULL,
+                    cooldown_hours INTEGER DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at INTEGER NOT NULL
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS micro_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    task_id INTEGER NOT NULL,
+                    proof TEXT,
+                    status TEXT NOT NULL,
+                    comment TEXT,
+                    created_at INTEGER NOT NULL,
+                    decided_at INTEGER
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS ix_micro_sub_user_status ON micro_submissions(user_id, status)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS ix_micro_sub_status ON micro_submissions(status, created_at)")
+            self.conn.execute("COMMIT")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def _ensure_owner_actions(self) -> None:
         """Additive journal of owner admin actions. Never stores secrets."""

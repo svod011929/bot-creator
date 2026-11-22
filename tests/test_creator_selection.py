@@ -97,9 +97,9 @@ async def test_comparison_copy_and_buttons(selection):
     ):
         assert copy in text
     buttons = [b for row in message.reply_markup.inline_keyboard for b in row]
-    assert [b.text for b in buttons] == ["⛏ Кликер бот", "👥 Реф. бот", "🌟 Звёздный бот"]
-    assert [b.callback_data for b in buttons] == ["tpl:clicker", "tpl:refbot", "tpl:starbot"]
-    assert text.index("Кликер бот") < text.index("Реф. бот") < text.index("Звёздный бот")
+    assert [b.text for b in buttons] == ["⛏ Кликер бот", "👥 Реф. бот", "🌟 Звёздный бот", "✅ Задания + проверка"]
+    assert [b.callback_data for b in buttons] == ["tpl:clicker", "tpl:refbot", "tpl:starbot", "tpl:microtasks"]
+    assert text.index("Кликер бот") < text.index("Реф. бот") < text.index("Звёздный бот") < text.index("Задания + проверка")
     assert "@BotFather" not in text and "VIP" not in text
     assert len(text.encode("utf-16-le")) // 2 <= 4096
     assert await state.get_state() is None
@@ -135,13 +135,13 @@ async def test_comparison_uses_current_prices_and_rerenders(selection, source):
 @pytest.mark.parametrize("daily", [0, 105])
 async def test_independent_zero_conditions(selection, creation, days, daily):
     ctx, feed, session, state = selection
-    for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT"):
+    for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS"):
         ctx.db.kv_set("price:" + key, str(creation))
     ctx.db.kv_set("price:START_HOSTING_DAYS", str(days))
     ctx.db.kv_set("price:HOSTING_DAY_PRICE", str(daily))
     await feed(msg_update(OWNER, "🔨 Создать бота"))
     text = plain(session.texts()[-1])
-    assert text.count("Создание: бесплатно" if creation == 0 else "Создание: 12,34 ₽") == 3
+    assert text.count("Создание: бесплатно" if creation == 0 else "Создание: 12,34 ₽") == 4
     assert ("В стоимость включён хостинг на 3 дн." in text) == (days > 0)
     assert "на 0 дн." not in text
     assert ("Хостинг: 1,05 ₽/сутки" in text) == (daily > 0)
@@ -386,11 +386,11 @@ async def test_oversized_escaped_metadata_is_not_truncated_or_accepted(selection
 
 async def test_largest_normal_prices_fit_without_rounding(selection):
     ctx, feed, session, state = selection
-    for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "HOSTING_DAY_PRICE"):
+    for key in ("PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS", "HOSTING_DAY_PRICE"):
         ctx.db.kv_set("price:" + key, "99999999999")
     await feed(msg_update(OWNER, "🔨 Создать бота"))
     text = plain(session.texts()[-1])
-    assert text.count("999 999 999,99 ₽") == 4
+    assert text.count("999 999 999,99 ₽") == 5
     assert len(text.encode("utf-16-le")) // 2 <= 4096
 
 
@@ -536,3 +536,23 @@ async def test_existing_lave_invoice_is_not_repriced_by_views(selection, monkeyp
     assert dict(ctx.db.lave_get(1)) == invoice
     assert fake.calls == calls
     assert not session.of(SendInvoice)
+
+
+
+@pytest.mark.asyncio
+async def test_microtasks_detail_has_no_demo_and_costs_250(selection):
+    from creator.states import CreateBot
+
+    ctx, feed, session, state = selection
+    await feed(cb_update(OWNER, "tpl:microtasks"))
+    message = session.of(EditMessageText)[-1]
+    text = plain(message.text)
+    assert "Задания + проверка" in text
+    assert "Стоимость: 250 ₽" in text
+    assert "Демо" not in text
+    assert "DDDMicroTasksBot" not in text
+    assert message.reply_markup.inline_keyboard[0][0].text == "⬅️ Назад"
+    assert message.reply_markup.inline_keyboard[0][0].callback_data == "create"
+    assert all(getattr(b, "url", None) is None for row in message.reply_markup.inline_keyboard for b in row)
+    assert await state.get_state() == CreateBot.token.state
+    assert await state.get_data() == {"template": "microtasks"}
