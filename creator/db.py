@@ -61,6 +61,20 @@ CREATE TABLE IF NOT EXISTS mgram_bots (
     last_sync_at INTEGER,
     FOREIGN KEY (bot_id) REFERENCES bots(id)
 );
+CREATE TABLE IF NOT EXISTS ideas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    votes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'new',
+    reward_kop INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS idea_votes (
+    idea_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (idea_id, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1027,3 +1041,55 @@ class DB:
     def mgram_get(self, bot_id: int) -> dict | None:
         row = self.one("SELECT * FROM mgram_bots WHERE bot_id=?", bot_id)
         return dict(row) if row else None
+
+    def idea_add(self, user_id: int, text: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO ideas (user_id, text, created_at) VALUES (?, ?, ?)",
+            (user_id, text.strip()[:1000], now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def idea_list(self, limit: int = 10) -> list:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM ideas WHERE status != 'hidden' ORDER BY votes DESC, id DESC LIMIT ?",
+            (limit,),
+        )]
+
+    def idea_get(self, idea_id: int) -> dict | None:
+        row = self.one("SELECT * FROM ideas WHERE id=?", idea_id)
+        return dict(row) if row else None
+
+    def idea_vote(self, idea_id: int, user_id: int) -> bool:
+        try:
+            self.conn.execute(
+                "INSERT INTO idea_votes (idea_id, user_id) VALUES (?, ?)",
+                (idea_id, user_id),
+            )
+            self.conn.execute("UPDATE ideas SET votes = votes + 1 WHERE id=?", (idea_id,))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def idea_set_status(self, idea_id: int, status: str, reward_kop: int = 0) -> None:
+        self.conn.execute(
+            "UPDATE ideas SET status=?, reward_kop=? WHERE id=?",
+            (status, reward_kop, idea_id),
+        )
+        self.conn.commit()
+
+    def idea_accept(self, idea_id: int, reward_kop: int) -> dict | None:
+        """Accept a new idea once and credit the author. None if already processed."""
+        with self.tx() as c:
+            row = c.execute("SELECT * FROM ideas WHERE id=?", (idea_id,)).fetchone()
+            if not row or row["status"] != "new":
+                return None
+            updated = c.execute(
+                "UPDATE ideas SET status=?, reward_kop=? WHERE id=? AND status='new'",
+                ("accepted", reward_kop, idea_id),
+            )
+            if updated.rowcount != 1:
+                return None
+            self._change_balance(c, row["user_id"], reward_kop, "idea_reward", f"Идея #{idea_id}")
+            return dict(row)

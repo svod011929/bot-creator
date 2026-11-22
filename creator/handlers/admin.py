@@ -47,9 +47,11 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
     groups = {
         "people": [[btn("👤 Пользователи", "a:users"), btn("🤖 Боты", "a:bots")],
                    [btn("🔎 Найти бота", "a:botfind")]],
-        "bc": [[btn("📢 Рассылка по конструктору", "a:bc")], [btn("📢 Рассылка по ботам", "a:bcb")]],
+        "bc": [[btn("📢 Рассылка по конструктору", "a:bc")], [btn("📢 Рассылка по ботам", "a:bcb")],
+                   [btn("📰 Новость (бот + канал)", "a:news")]],
         "fin": [[btn("💰 Цены", "a:prices"), btn("💳 LavePay", "a:lave:0")]],
-        "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")]],
+        "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")],
+                   [btn("💡 Идеи пользователей", "a:ideas")]],
     }
     integ = []
     if ctx is not None and ctx.tgrass is not None:
@@ -835,3 +837,103 @@ async def lavepay_summary(cb: CallbackQuery, ctx: Ctx) -> None:
     kb = ikb(*( [nav] if nav else [] ), [btn("⬅️ Назад", "a:main")])
     await cb.message.edit_text("\n".join(lines), reply_markup=kb)
     await cb.answer()
+
+
+@router.callback_query(F.data == "a:news")
+async def news_start(cb: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Admin.news)
+    await cb.message.edit_text(
+        "📰 Пришлите новость.\n\n"
+        "Она будет опубликована и в боте (всем пользователям), и в канале новостей.",
+        reply_markup=cancel_kb("a:main"),
+    )
+    await cb.answer()
+
+
+@router.message(Admin.news)
+async def news_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    from creator.handlers.gate import _username
+    channel = _username(ctx.cfg.channel_url)
+    await state.update_data(news_chat=message.chat.id, news_msg=message.message_id, news_channel=channel)
+    where = "в бот и в канал" if channel else "только в бот (канал не настроен)"
+    await message.answer(
+        f"👁 Предпросмотр. Опубликовать {where}?",
+        reply_markup=ikb(
+            [btn("✅ Опубликовать", "a:newsgo")],
+            [btn("❌ Отмена", "a:main")],
+        ),
+    )
+
+
+@router.callback_query(F.data == "a:newsgo")
+async def news_send(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    data = await state.get_data()
+    await state.clear()
+    chat_id = data.get("news_chat")
+    msg_id = data.get("news_msg")
+    channel = data.get("news_channel")
+    if not chat_id or not msg_id:
+        await cb.answer("Сначала пришлите сообщение", show_alert=True)
+        return
+    await cb.answer()
+    ch_ok = False
+    if channel:
+        try:
+            await cb.bot.copy_message(channel, chat_id, msg_id)
+            ch_ok = True
+        except Exception as exc:  # noqa: BLE001
+            await cb.message.answer(f"⚠️ Не удалось опубликовать в канал: {exc}")
+    ids = ctx.db.all_user_ids()
+    await cb.message.edit_text(f"🚀 Публикация: канал {'✅' if ch_ok else '—'}, бот — {len(ids)} чел.")
+
+    async def run() -> None:
+        ok = fail = 0
+        for uid in ids:
+            try:
+                await cb.bot.copy_message(uid, chat_id, msg_id)
+                ok += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+            await asyncio.sleep(0.05)
+        await cb.bot.send_message(
+            cb.from_user.id,
+            f"✅ Новость опубликована.\nКанал: {'да' if ch_ok else 'нет'}\nБот: {ok} доставлено, {fail} ошибок.",
+        )
+
+    asyncio.create_task(run())
+
+
+@router.callback_query(F.data == "a:ideas")
+async def admin_ideas(cb: CallbackQuery, ctx: Ctx) -> None:
+    items = ctx.db.idea_list(15)
+    if not items:
+        await cb.answer("Идей пока нет", show_alert=True)
+        return
+    lines = ["💡 <b>Идеи пользователей</b>\n"]
+    rows = []
+    for it in items[:10]:
+        lines.append(f"#{it['id']} · {it['votes']} · {it['status']}\n{html.escape(it['text'][:100])}")
+        if it["status"] == "new":
+            rows.append([btn(f"✅ Принять #{it['id']}", f"a:ideaok:{it['id']}")])
+    rows.append([btn("⬅️ Назад", "a:main")])
+    await cb.message.edit_text("\n\n".join(lines), reply_markup=ikb(*rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("a:ideaok:"))
+async def admin_idea_accept(cb: CallbackQuery, ctx: Ctx) -> None:
+    iid = int(cb.data.split(":")[2])
+    from creator.handlers.ideas import REWARD_KOP
+    idea = ctx.db.idea_accept(iid, REWARD_KOP)
+    if not idea:
+        await cb.answer("Идея уже обработана", show_alert=True)
+        return
+    try:
+        await cb.bot.send_message(
+            idea["user_id"],
+            f"🎉 Ваша идея #{iid} принята!\nНа баланс начислено 50 ₽.\nСпасибо, что помогаете развивать конструктор!",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.answer("Идея принята, награда начислена")
+    await admin_ideas(cb, ctx)
