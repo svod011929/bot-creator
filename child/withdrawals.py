@@ -124,12 +124,12 @@ async def show_detail(cb: CallbackQuery, app: ChildApp, scope: str, page: int, w
     if scope != 'mine':
         lines.append(f"Заявитель: <code>{w['user_id']}</code>")
     if w['status'] == 'paid' or (scope != 'mine' and w['status'] == 'pending'):
-        lines.append('«Выплачено» — ручная отметка владельца, не подтверждение денежного перевода.')
+        lines.append('«Отмечена выплаченной» — ручная отметка владельца, не подтверждение денежного перевода.')
     details = w['details'] or ''
     lines.append(f"Реквизиты: <code>{html.escape(details[:600])}{'…' if len(details) > 600 else ''}</code>")
     rows = []
     if scope != 'mine' and w['status'] == 'pending':
-        rows.append([button('✅ Выплачено', f'wd:ok:{wid}:{page}'), button('❌ Отклонить', f'wd:no:{wid}:{page}')])
+        rows.append([button('✅ Отметить выплаченной', f'wd:ok:{wid}:{page}'), button('❌ Отклонить', f'wd:no:{wid}:{page}')])
     rows.append([button('К списку', f'wh:list:{scope}:{page}')])
     rows.append([button('К профилю', 'wh:profile') if scope == 'mine' else button('К админке', 'wh:admin')])
     await render(cb, '\n'.join(lines), rows)
@@ -186,9 +186,10 @@ def build_history_router(app: ChildApp) -> Router:
                 await cb.answer('Заявка уже обработана', show_alert=True)
             else:
                 await cb.answer()
-                status = '✅ выплачена' if parts[1] == 'ok' else '❌ отклонена, средства возвращены на баланс'
+                text = (f"✅ Владелец бота отметил заявку на вывод №{w['id']} как выплаченную." if parts[1] == 'ok'
+                        else f"❌ Заявка на вывод №{w['id']} отклонена владельцем, средства возвращены на баланс.")
                 # Existing notification, only on the first actual decision. No notifications on reads.
-                await safe_send(cb.bot, w['user_id'], f"Заявка на вывод №{w['id']} {status}.")
+                await safe_send(cb.bot, w['user_id'], text)
             # Notification is an await: revalidate after it before rendering sensitive details.
             if is_owner(app, cb.from_user.id):
                 await show_detail(cb, app, scope, page, wid)
