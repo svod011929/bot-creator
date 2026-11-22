@@ -8,7 +8,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from creator import ops_history
+from creator import ops_history, showcase
 from creator.keyboards import BTN_CABINET, BTN_PARTNERS, btn, ikb
 from creator.money import rub
 from creator.services import Ctx
@@ -136,13 +136,20 @@ async def partners(message: Message, ctx: Ctx) -> None:
     uid = message.from_user.id
     u = ctx.db.user(uid)
     link = f"https://t.me/{ctx.bot_username}?start=ref{uid}"
+    s = showcase.partner_summary(ctx.db, uid)
+    if s["count"]:
+        accruals = (f"🧾 Начислений: {s['count']} на {rub(s['total'])}, за 30 дней: {rub(s['last30'])}\n"
+                    f"Последнее: {ops_history.when(s['last'])}\n")
+    else:
+        accruals = "🧾 Начислений пока нет.\n"
     await message.answer(
         "👥 <b>Партнёрская программа</b>\n\n"
         f"Приглашайте пользователей и получайте <b>{ctx.price('REF_PERCENT')}%</b> с каждой их оплаты "
         "— навсегда. Начисления приходят на баланс, им можно оплачивать ботов, "
-        "хостинг и VIP.\n\n"
+        "хостинг и VIP.\n<i>Процент — текущая настройка; уже начисленное не пересчитывается.</i>\n\n"
         f"👤 Приглашено: {ctx.db.referrals_count(uid)}\n"
-        f"💰 Заработано: {rub(u['ref_earned'])}\n\n"
+        f"💰 Заработано: {rub(u['ref_earned'])}\n{accruals}\n"
         f"🔗 Ваша ссылка:\n<code>{link}</code>",
+        reply_markup=ikb([btn("📜 Партнёрские начисления", "cab:h:ref:0")]),
         disable_web_page_preview=True,
     )
