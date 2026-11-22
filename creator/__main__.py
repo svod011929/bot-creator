@@ -22,10 +22,8 @@ from creator.billing import billing_loop
 from creator.config import PROJECT_ROOT, load_config
 from creator.db import DB
 from creator.lavepay import LavePayClient, LavePayService
-from creator.piarflow import PiarFlowClient, PiarFlowService
 from creator.services import Ctx
 from creator.supervisor import Supervisor
-from creator.tgrass import TGrassClient, TGrassService
 
 log = logging.getLogger("creator")
 
@@ -51,8 +49,8 @@ def dry_run() -> int:
                 return 1
     print("[ok] токен BOT_TOKEN " + ("задан" if cfg.bot_token else "НЕ задан — для запуска заполните .env"))
     print(f"[ok] админы: {len(cfg.admin_ids)}")
-    print("[ok] TGrass: " + ("включён (фабрика ботов)" if cfg.tgrass_enabled else "выключен — нет TGRASS_FACTORY_TOKEN"))
-    print("[ok] PiarFlow: " + ("включён (Factory API)" if cfg.piarflow_enabled else "выключен — нет PIARFLOW_TOKEN"))
+    print("[ok] TGrass: " + ("настроен источник или фабрика" if cfg.tgrass_enabled else "нет настроенного источника/фабрики"))
+    print("[ok] PiarFlow: " + ("настроен источник или фабрика" if cfg.piarflow_enabled else "нет настроенного источника/фабрики"))
     return 0
 
 
@@ -91,22 +89,10 @@ async def run() -> None:
         tasks.append(asyncio.create_task(ctx.lave.poll_loop()))
         if cfg.lavepay_webhook_port and cfg.lavepay_webhook_secret:
             webhook_runner = await ctx.lave.start_webhook(cfg.lavepay_webhook_host, cfg.lavepay_webhook_port)
-    tgrass_client = None
-    if cfg.tgrass_enabled:
-        tgrass_client = TGrassClient(cfg.tgrass_factory_token, cfg.tgrass_base_url)
-        ctx.tgrass = TGrassService(ctx, tgrass_client, notify=notify)
-        tasks.append(asyncio.create_task(ctx.tgrass.sync_loop()))
-        log.info("TGrass: режим фабрики включён, владелец аккаунта %s", cfg.tgrass_owner_id or "НЕ задан")
-    pf_client = None
-    if cfg.piarflow_enabled:
-        pf_client = PiarFlowClient(cfg.piarflow_token, cfg.piarflow_base_url)
-        ctx.piarflow = PiarFlowService(ctx, pf_client, notify=notify)
-        try:
-            bal = await pf_client.balance()
-            log.info("PiarFlow: токен принят, ботов на аккаунте: %s", len(bal.get("bots") or []))
-        except Exception as e:  # noqa: BLE001
-            log.warning("PiarFlow: проверка токена не удалась: %s", e)
-        tasks.append(asyncio.create_task(ctx.piarflow.sync_loop()))
+    from creator.integrations import ensure_services, wait_and_sync
+    ensure_services(ctx)
+    for network in ("tgrass", "piarflow"):
+        tasks.append(asyncio.create_task(wait_and_sync(ctx, network)))
     dp = build_dispatcher(ctx)
     await bot.set_my_commands([BotCommand(command="start", description="Главное меню")])
     started = await sup.start_all()
@@ -122,10 +108,10 @@ async def run() -> None:
             await webhook_runner.cleanup()
         if lave_client:
             await lave_client.close()
-        if tgrass_client:
-            await tgrass_client.close()
-        if pf_client:
-            await pf_client.close()
+        for network in ("tgrass", "piarflow"):
+            service = getattr(ctx, network)
+            if service is not None:
+                await service.client.close()
         await sup.shutdown()
         await bot.session.close()
         db.close()

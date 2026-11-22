@@ -53,7 +53,7 @@ def app_text(ctx: Ctx, t) -> str:
             f"Владелец: <code>{t['owner_id']}</code> {who}\n"
             f"Пользователей: {users} (на момент заявки {t['users_at_apply']})")
     if t["error"]:
-        text += f"\n⚠️ Последняя ошибка TGrass: {html.escape(t['error'])}"
+        text += "\n⚠️ Записана ошибка подключения; причина не проверена."
     return text
 
 
@@ -112,15 +112,15 @@ async def decide(cb: CallbackQuery, ctx: Ctx) -> None:
             return
         try:
             await ctx.tgrass.approve(bot_id, cb.from_user.id)
-        except (TGrassError, LookupError) as e:
-            await cb.answer(f"TGrass: {str(e)[:150]}", show_alert=True)
+        except (TGrassError, LookupError):
+            await cb.answer("TGrass: операция не выполнена; проверьте источник и заявку", show_alert=True)
             return
         reward = rub(ctx.tgrass.reward())
         t2 = ctx.db.tgrass(bot_id)
         mode = (t2["mode"] if t2 and "mode" in t2.keys() and t2["mode"] else "factory")
         extra = ""
         if t2 and t2["error"] and str(t2["error"]).startswith("factory→relay"):
-            extra = f"\n⚠️ Фабрика не удалась — включена трансляция.\n<code>{html.escape(str(t2['error'])[:180])}</code>"
+            extra = "\n⚠️ Фабрика не удалась — записано подключение через источник креатора."
         await _edit(cb, f"✅ Бот ID {bot_id} @{html.escape(b['username'] or '')} подключён к TGrass "
                         f"[{MODE.get(mode, mode)}].{extra}",
                     ikb([btn("💸 TGrass", "a:tg")]))
@@ -167,7 +167,8 @@ async def tg_main(cb: CallbackQuery, ctx: Ctx) -> None:
             f"Награда за ОП: {rub(ctx.tgrass.reward())}, минимум пользователей: "
             f"{ctx.tgrass.min_users()} (меняется в «💰 Цены»)")
     if not ctx.cfg.tgrass_owner_id:
-        text += "\n\n⚠️ Не задан TGRASS_OWNER_ID — одобрение не сработает."
+        text += ("\n\n⚠️ Не задан TGRASS_OWNER_ID: регистрация фабрики/автохаба недоступна. "
+                 "Можно задать готовый ключ в «Источники ОП».")
     await _edit(cb, text, ikb([btn(f"⏳ Заявки ({len(pending)})", "a:tgl:pending")],
                               [btn(f"✅ Подключённые ({len(approved)})", "a:tgl:approved")],
                               [btn(f"⛔ Отключённые ({len(disabled)})", "a:tgl:disabled")] if disabled else [],
@@ -217,7 +218,7 @@ async def bot_card(cb: CallbackQuery, ctx: Ctx, bot_id: int) -> None:
         except TGrassError as e:
             lines.append(f"TGrass: не удалось получить статистику ({html.escape(e.message[:100])})")
     if t["error"]:
-        lines.append(f"⚠️ {html.escape(t['error'])}")
+        lines.append("⚠️ Записана ошибка подключения; причина не проверена.")
     kb = []
     if t["status"] == "approved":
         kb.append([btn("⛔ Отключить ОП в боте", f"tg:off:{bot_id}")])

@@ -61,8 +61,8 @@ class Supervisor:
         d = self.bot_dir(bot_id)
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, 0o700)
-        tgrass_key = self.db.tgrass_key_for(bot_id) if self.cfg.tgrass_enabled else ""
-        piarflow_key = self.db.pf_key_for(bot_id) if self.cfg.piarflow_enabled else ""
+        tgrass_key = self.db.tgrass_key_for(bot_id)
+        piarflow_key = self.db.pf_key_for(bot_id)
         write_config(d, {
             "bot_id": b["id"],
             "tgrass_key": tgrass_key,

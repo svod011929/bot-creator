@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import aiohttp
 
 from creator.db import now
+from creator.sponsor_sources import SourceError, SourceStore, atomic_object
 from creator.tgrass import child_users_count
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -135,6 +136,7 @@ class PiarFlowService:
         self.client = client
         self.notify = notify
         self._hub_key: str | None = None
+        self._hub_lock = asyncio.Lock()
 
     @property
     def db(self):
@@ -166,33 +168,28 @@ class PiarFlowService:
     def _write_hub_file(self, api_key: str, bot_id: int | None) -> None:
         path = self.hub_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"api_key": api_key, "bot_id": bot_id}, ensure_ascii=False), encoding="utf-8")
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+        atomic_object(path, {"api_key": api_key, "bot_id": bot_id})
 
     async def ensure_hub_key(self) -> str:
-        """API key хаб-бота креатора для режима трансляции. Не логирует ключ."""
-        if self._hub_key:
-            return self._hub_key
-        key = (self.ctx.cfg.piarflow_hub_api_key or "").strip()
-        if not key:
-            key = str(self._read_hub_file().get("api_key") or "").strip()
-        if not key:
-            token = (self.ctx.cfg.bot_token or "").strip()
-            if not token:
-                raise PiarFlowError("нет BOT_TOKEN для регистрации хаб-бота PiarFlow")
+        """Resolve current precedence, without trusting a stale in-memory key."""
+        async with self._hub_lock:
+            store = SourceStore(self.ctx.cfg, "piarflow")
             try:
-                bot = await self.client.add_bot(token)
-            except PiarFlowError as e:
-                raise PiarFlowError(f"не удалось зарегистрировать хаб-бот: {e.message}", e.status) from e
-            key = str(bot["api_key"])
-            pf_id = int(bot.get("bot_id") or token_bot_id(token) or 0) or None
-            self._write_hub_file(key, pf_id)
-            log.info("PiarFlow: хаб-бот зарегистрирован (bot_id=%s)", pf_id)
-        self._hub_key = key
-        return key
+                source = store.resolve()
+                if source.key:
+                    return source.key
+                if not self.ctx.cfg.piarflow_token or not self.ctx.cfg.bot_token:
+                    raise PiarFlowError("Нет ключа источника или данных для регистрации хаба")
+                bot = await self.client.add_bot(self.ctx.cfg.bot_token)
+                key = str(bot["api_key"])
+                # Settings may have changed while registration was awaiting a response.
+                source = store.resolve()
+                if source.key:
+                    return source.key
+                self._write_hub_file(key, int(bot.get("bot_id") or 0) or None)
+                return key
+            except SourceError:
+                raise PiarFlowError("Источник недоступен; проверьте настройки источника") from None
 
     async def approve(self, bot_id: int, admin_id: int) -> None:
         """Одобряет заявку: сначала factory, при любой ошибке — relay (хаб).
@@ -211,14 +208,16 @@ class PiarFlowService:
         # Повторное включение уже зарегистрированного factory-бота — без /factory/bots заново.
         if t["status"] == "disabled" and prev_mode == "factory" and key and pf_id:
             try:
+                if not self.ctx.cfg.piarflow_token:
+                    raise PiarFlowError("Нет данных фабрики")
                 await self.client.set_active(pf_id, True)
             except PiarFlowError as e:
                 factory_err = e
-                log.info("PiarFlow: set_active failed for bot %s — fallback relay (%s)", bot_id, e.message[:120])
+                log.info("PiarFlow: set_active failed for bot %s — fallback relay (%s)", bot_id, "ошибка сети/API")
                 try:
                     mode, key, pf_id, fell_back = "relay", await self.ensure_hub_key(), None, True
                 except PiarFlowError as hub_e:
-                    self.db.pf_set(bot_id, error=f"factory: {e.message[:120]}; hub: {hub_e.message[:120]}"[:300])
+                    self.db.pf_set(bot_id, error="factory: ошибка сети/API; hub: источник недоступен")
                     raise hub_e
             else:
                 self.db.pf_set(bot_id, status="approved", mode="factory", api_key=key, pf_bot_id=pf_id,
@@ -242,23 +241,25 @@ class PiarFlowService:
 
         # Новая заявка (и любые pending): всегда factory → при ошибке relay.
         try:
+            if not self.ctx.cfg.piarflow_token:
+                raise PiarFlowError("Нет данных фабрики")
             bot = await self.client.add_bot(b["token"])
             key = str(bot["api_key"])
             pf_id = int(bot.get("bot_id") or token_bot_id(b["token"]) or 0) or None
         except PiarFlowError as e:
             factory_err = e
-            log.info("PiarFlow: factory failed for bot %s — fallback relay (%s)", bot_id, e.message[:120])
+            log.info("PiarFlow: factory failed for bot %s — fallback relay (%s)", bot_id, "ошибка сети/API")
             try:
                 mode, key, pf_id, fell_back = "relay", await self.ensure_hub_key(), None, True
             except PiarFlowError as hub_e:
-                msg = f"factory: {e.message[:120]}; hub: {hub_e.message[:120]}"[:300]
+                msg = "factory: ошибка сети/API; hub: источник недоступен"
                 self.db.pf_set(bot_id, error=msg)
                 raise hub_e
 
         fields = dict(status="approved", mode=mode, api_key=key, pf_bot_id=pf_id, error=None,
                       decided_at=now(), decided_by=admin_id)
         if fell_back and factory_err is not None:
-            fields["error"] = f"factory→relay: {factory_err.message[:200]}"[:300]
+            fields["error"] = "factory→relay: ошибка регистрации"
         self.db.pf_set(bot_id, **fields)
         await self.ctx.apply_changes(bot_id)
         log.info("bot %s подключён к PiarFlow mode=%s%s (админ %s)",

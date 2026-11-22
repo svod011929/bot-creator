@@ -316,7 +316,7 @@ async def test_factory_other_error_falls_back_to_relay(penv):
     await feed(cb_update(ADMIN, f"pf:ok:{bot_id}"))
     t = ctx.db.pf(bot_id)
     assert t["status"] == "approved" and t["mode"] == "relay" and t["api_key"] == HUB_KEY
-    assert "upstream timeout" in (t["error"] or "")
+    assert t["error"] == "factory→relay: ошибка регистрации"  # raw provider details are secret-unsafe
 
 
 async def test_stale_pfmod_applies_as_factory_first(penv):
