@@ -17,7 +17,7 @@ from creator.states import BotEdit
 
 router = Router(name="bot_setup")
 REQUEST = re.compile(
-    r"setup:([1-9][0-9]{0,18}):(clicker|refbot|starbot):"
+    r"setup:([1-9][0-9]{0,18}):(clicker|refbot|starbot|microtasks):"
     r"(ready|settings|card|channel|group:(appearance|rules)|edit:[a-z_]+)"
 )
 LEGACY = re.compile(r"b:([1-9][0-9]{0,18}):(set|sk:([a-z_]+))")

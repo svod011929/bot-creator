@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from creator.config import support_url
 from creator.keyboards import BTN_INFO, btn, cancel_kb, ikb, url_btn
+from creator.lavepay_signup import lavepay_signup_link
 from creator.services import Ctx
 from creator.states import Info
 
@@ -53,7 +54,8 @@ HELP = (
     "🔑 <b>Токен.</b> Это ключ от бота: отправляйте его только конструктору. "
     "Если токен перевыпущен в @BotFather, бот остановится с ошибкой «Неверный токен» — напишите нам.\n\n"
     "💸 <b>Выплаты в ваших ботах.</b> Заявки ваших пользователей на вывод обрабатываете вы сами. "
-    "В карточке кликера или реф-бота можно подключить свой магазин LavePay: тогда пользователь "
+    "В карточке кликера, реф-бота или бота заданий можно подключить свой магазин "
+    f"{lavepay_signup_link('LavePay')}: тогда пользователь "
     "оставляет заявку на USDT TRC-20, а выплата уходит только после вашего подтверждения и живого курса. "
     "Без магазина остаётся ручной вывод: «Отметить выплаченной» — только отметка, конструктор деньги не переводит.\n\n"
     "↩️ <b>Если запутались.</b> /cancel или любая кнопка меню отменяет текущий ввод."
