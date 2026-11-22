@@ -101,6 +101,9 @@ class Config:
     piarflow_base_url: str = "https://piarflow.com/v1"
     piarflow_hub_api_key: str = ""  # API key хаб-бота для режима «трансляция» (или data/piarflow_hub.json)
     tgrass_hub_api_key: str = ""    # auth_token хаб-бота TGrass для «трансляции» (или data/tgrass_hub.json)
+    webhook_public_base: str = ""   # public origin for dashboard URLs, e.g. https://bnbb.tech
+    webhook_listen_host: str = "127.0.0.1"
+    webhook_listen_port: int = 0    # 0 — listener off; Caddy should proxy /webhooks/* here
 
     @property
     def approver(self) -> int | None:
@@ -197,4 +200,7 @@ def load_config(env_file: Path | None = None) -> Config:
         piarflow_base_url=(os.environ.get("PIARFLOW_BASE_URL", "").strip() or "https://piarflow.com/v1").rstrip("/"),
         piarflow_hub_api_key=os.environ.get("PIARFLOW_HUB_API_KEY", "").strip(),
         tgrass_hub_api_key=os.environ.get("TGRASS_HUB_API_KEY", "").strip(),
+        webhook_public_base=(os.environ.get("WEBHOOK_PUBLIC_BASE", "").strip() or "").rstrip("/"),
+        webhook_listen_host=os.environ.get("WEBHOOK_LISTEN_HOST", "").strip() or "127.0.0.1",
+        webhook_listen_port=_int("WEBHOOK_LISTEN_PORT", 0),
     )

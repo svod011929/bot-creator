@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS tgrass_ops (
     owner_id INTEGER NOT NULL,
     reward_kop INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
+    offer_link TEXT,
     UNIQUE (bot_id, tg_user_id, offer_id)
 );
 CREATE INDEX IF NOT EXISTS ix_tgrass_ops_bot ON tgrass_ops(bot_id, created_at);
@@ -134,6 +135,30 @@ CREATE TABLE IF NOT EXISTS pf_ops (
     UNIQUE (bot_id, tg_user_id, link)
 );
 CREATE INDEX IF NOT EXISTS ix_pf_ops_bot ON pf_ops(bot_id, created_at);
+CREATE TABLE IF NOT EXISTS webhook_secrets (
+    bot_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (bot_id, provider)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_webhook_secret ON webhook_secrets(secret);
+CREATE TABLE IF NOT EXISTS unsubscribe_penalties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    bot_id INTEGER NOT NULL,
+    op_id INTEGER NOT NULL,
+    tg_user_id INTEGER NOT NULL,
+    offer_key TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    owner_id INTEGER NOT NULL,
+    withdrawal_request_id INTEGER,
+    child_reverted INTEGER NOT NULL DEFAULT 0,
+    owner_notified INTEGER NOT NULL DEFAULT 0,
+    user_notified INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE (provider, bot_id, op_id)
+);
 CREATE TABLE IF NOT EXISTS withdrawal_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -185,6 +210,7 @@ class DB:
         self.conn.executescript(SCHEMA)
         self._lock = threading.RLock()
         self._ensure_mode_columns()
+        self._ensure_unsubscribe_schema()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -207,6 +233,13 @@ class DB:
                 if "mode" not in self._columns(table):
                     self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN mode TEXT NOT NULL DEFAULT 'factory'")
+
+    def _ensure_unsubscribe_schema(self) -> None:
+        """Additive columns/tables for unsubscribe penalties (existing rows stay)."""
+        with self._lock:
+            if "tgrass_ops" in {r[0] for r in self.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")} and "offer_link" not in self._columns("tgrass_ops"):
+                self.conn.execute("ALTER TABLE tgrass_ops ADD COLUMN offer_link TEXT")
 
     def migrate_stars_to_rub(self) -> None:
         """Однократный перевод старой базы (суммы в Telegram Stars) в копейки по курсу 1 ⭐ = 1,5 ₽."""
@@ -583,7 +616,7 @@ class DB:
         return (row["api_key"] or "") if row else ""
 
     def tgrass_credit(self, bot_id: int, tg_user_id: int, offer_id: int, reward_kop: int,
-                      ts: int | None = None) -> bool:
+                      ts: int | None = None, offer_link: str | None = None) -> bool:
         """Идемпотентно засчитывает одну ОП владельцу бота (reward_kop копеек сразу на баланс).
         False — уже засчитана (или бота нет)."""
         with self.tx() as c:
@@ -593,8 +626,8 @@ class DB:
             owner = b["owner_id"]
             reward_kop = max(0, reward_kop)
             cur = c.execute(
-                "INSERT OR IGNORE INTO tgrass_ops(bot_id,tg_user_id,offer_id,owner_id,reward_kop,created_at) "
-                "VALUES(?,?,?,?,?,?)", (bot_id, tg_user_id, offer_id, owner, reward_kop, ts or now()))
+                "INSERT OR IGNORE INTO tgrass_ops(bot_id,tg_user_id,offer_id,owner_id,reward_kop,created_at,offer_link) "
+                "VALUES(?,?,?,?,?,?,?)", (bot_id, tg_user_id, offer_id, owner, reward_kop, ts or now(), offer_link or None))
             if cur.rowcount != 1:
                 return False
             if reward_kop > 0:

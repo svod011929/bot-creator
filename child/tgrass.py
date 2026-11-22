@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS tgrass_shown (
     user_id INTEGER NOT NULL,
     offer_id INTEGER NOT NULL,
     shown_at INTEGER NOT NULL,
+    offer_link TEXT,
     PRIMARY KEY (user_id, offer_id)
 );
 CREATE TABLE IF NOT EXISTS tgrass_done (
@@ -39,7 +41,14 @@ CREATE TABLE IF NOT EXISTS tgrass_done (
     offer_id INTEGER NOT NULL,
     fake INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
+    offer_link TEXT,
     UNIQUE (user_id, offer_id)
+);
+CREATE TABLE IF NOT EXISTS sponsor_gate_reset (
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    reset_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, provider)
 );
 """
 
@@ -54,6 +63,7 @@ class TGrassGate:
         self._pass_until: dict[int, float] = {}
         with db.lock:
             db.conn.executescript(SCHEMA)
+            _migrate_schema(db)
 
     async def _post(self, path: str, body: dict) -> tuple[dict | None, int, int]:
         """(data|None, http_status, duration_ms). Успешный done-лог — на стороне вызывающего."""
@@ -106,8 +116,10 @@ class TGrassGate:
                     if shown and not self.db.one("SELECT 1 FROM tgrass_done WHERE user_id=? AND offer_id=?", uid, oid):
                         newly.append(oid)
                 elif not shown:
-                    self.db.exec("INSERT OR IGNORE INTO tgrass_shown(user_id,offer_id,shown_at) VALUES(?,?,?)",
-                                 uid, oid, ts)
+                    link = str(o.get("link") or "") or None
+                    self.db.exec(
+                        "INSERT OR IGNORE INTO tgrass_shown(user_id,offer_id,shown_at,offer_link) VALUES(?,?,?,?)",
+                        uid, oid, ts, link)
         return newly
 
     async def _complete(self, uid: int, offer_ids: list[int]) -> None:
@@ -125,19 +137,27 @@ class TGrassGate:
             )
             if data.get("status") not in (None, "subscribed"):
                 continue  # TGrass не подтвердил — попробуем при следующей проверке
-            self.db.exec("INSERT OR IGNORE INTO tgrass_done(user_id,offer_id,fake,created_at) VALUES(?,?,?,?)",
-                         uid, oid, 1 if fake else 0, int(time.time()))
+            shown = self.db.one("SELECT offer_link FROM tgrass_shown WHERE user_id=? AND offer_id=?", uid, oid)
+            link = (shown["offer_link"] if shown and "offer_link" in shown.keys() else None)
+            self.db.exec(
+                "INSERT OR IGNORE INTO tgrass_done(user_id,offer_id,fake,created_at,offer_link) VALUES(?,?,?,?,?)",
+                uid, oid, 1 if fake else 0, int(time.time()), link)
 
     async def check(self, u: User, force: bool = False) -> InlineKeyboardMarkup | None:
         """None — пользователь может пользоваться ботом; иначе клавиатура с офферами."""
         now = time.time()
-        if not force and self._pass_until.get(u.id, 0) > now:
+        reset = _has_reset(self.db, int(u.id), "tgrass")
+        if reset:
+            self._pass_until.pop(int(u.id), None)
+        if not force and not reset and self._pass_until.get(u.id, 0) > now:
             slog.log_skip(log, _NET, "cache")
             return None
         data, http_status, ms = await self._post("/offers", self.user_body(u))
         if data is None:
             self._pass_until[u.id] = now + ERROR_TTL
             return None
+        if reset:
+            _clear_reset(self.db, int(u.id), "tgrass")
         api_status = data.get("status")
         offers = [o for o in (data.get("offers") or []) if isinstance(o, dict)]
         offer_statuses = ["subscribed" if o.get("subscribed") else "unsubscribed" for o in offers]
@@ -171,3 +191,72 @@ class TGrassGate:
             statuses=slog.status_counts(offer_statuses), result=result,
         )
         return kb
+
+def _migrate_schema(db: ChildDB) -> None:
+    cols_shown = {r["name"] for r in db.conn.execute("PRAGMA table_info(tgrass_shown)")}
+    if "offer_link" not in cols_shown:
+        db.conn.execute("ALTER TABLE tgrass_shown ADD COLUMN offer_link TEXT")
+    cols_done = {r["name"] for r in db.conn.execute("PRAGMA table_info(tgrass_done)")}
+    if "offer_link" not in cols_done:
+        db.conn.execute("ALTER TABLE tgrass_done ADD COLUMN offer_link TEXT")
+    db.conn.execute(
+        "CREATE TABLE IF NOT EXISTS sponsor_gate_reset ("
+        "user_id INTEGER NOT NULL, provider TEXT NOT NULL, reset_at INTEGER NOT NULL, "
+        "PRIMARY KEY (user_id, provider))")
+
+
+def _has_reset(db: ChildDB, uid: int, provider: str) -> bool:
+    try:
+        return db.one("SELECT 1 FROM sponsor_gate_reset WHERE user_id=? AND provider=?", uid, provider) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_reset(db: ChildDB, uid: int, provider: str) -> None:
+    try:
+        db.exec("DELETE FROM sponsor_gate_reset WHERE user_id=? AND provider=?", uid, provider)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def revert_completion(bot_dir: Path, uid: int, offer_id: int) -> None:
+    """Drop the local completion so the gate shows again; does not change creator UNIQUE ops."""
+    import sqlite3
+    path = Path(bot_dir) / "bot.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(SCHEMA)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tgrass_shown)")}
+        if "offer_link" not in cols:
+            conn.execute("ALTER TABLE tgrass_shown ADD COLUMN offer_link TEXT")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tgrass_done)")}
+        if "offer_link" not in cols:
+            conn.execute("ALTER TABLE tgrass_done ADD COLUMN offer_link TEXT")
+        conn.execute("DELETE FROM tgrass_done WHERE user_id=? AND offer_id=?", (uid, offer_id))
+        conn.execute("DELETE FROM tgrass_shown WHERE user_id=? AND offer_id=?", (uid, offer_id))
+        conn.execute(
+            "INSERT OR REPLACE INTO sponsor_gate_reset(user_id,provider,reset_at) VALUES(?,?,?)",
+            (uid, "tgrass", int(time.time())))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def completion_state(bot_dir: Path, uid: int, offer_id: int) -> dict:
+    import sqlite3
+    path = Path(bot_dir) / "bot.db"
+    if not path.exists():
+        return {"done": False}
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM tgrass_done WHERE user_id=? AND offer_id=?", (uid, offer_id)
+        ).fetchone()
+        return {"done": row is not None}
+    except sqlite3.Error:
+        return {"done": False}
+    finally:
+        conn.close()
+

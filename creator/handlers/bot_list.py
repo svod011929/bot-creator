@@ -188,7 +188,8 @@ async def open_card(cb: CallbackQuery, state: FSMContext, ctx: Ctx):
     if not unchanged():
         await alert(cb, "Бот не найден")
         return
-    if await send(cb, text, bot_card_kb(row, row["sale_price"] is not None, ctx.extra_earn)):
+    has_wh = bool(getattr(ctx, "unsub", None) and (ctx.db.tgrass(row["id"]) or ctx.db.pf(row["id"])))
+    if await send(cb, text, bot_card_kb(row, row["sale_price"] is not None, ctx.extra_earn, webhooks=has_wh)):
         if unchanged() and await snapshot(state) == before and before[0] is not None:
             await state.clear()
     await cb.answer()

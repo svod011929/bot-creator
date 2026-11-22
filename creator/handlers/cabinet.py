@@ -19,6 +19,7 @@ KIND_TEXT = {
     "topup": "Пополнение", "create": "Создание бота", "hosting": "Хостинг", "vip": "VIP", "ref": "Партнёрские",
     "resale_buy": "Покупка бота", "resale_sell": "Продажа бота", "refund": "Возврат", "admin": "Корректировка",
     "tgrass": "TGrass ОП", "piarflow": "PiarFlow задания",
+    "tgrass_penalty": "Штраф TGrass за отписку", "piarflow_penalty": "Штраф PiarFlow за отписку",
     "withdraw": "Вывод заработанного", "withdraw_refund": "Возврат по заявке на вывод",
 }
 

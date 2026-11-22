@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS pf_done (
     created_at INTEGER NOT NULL,
     UNIQUE (user_id, link)
 );
+CREATE TABLE IF NOT EXISTS sponsor_gate_reset (
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    reset_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, provider)
+);
 """
 
 
@@ -59,6 +65,10 @@ class PiarFlowGate:
         self._pending: dict[int, list[str]] = {}
         with db.lock:
             db.conn.executescript(SCHEMA)
+            db.conn.execute(
+                "CREATE TABLE IF NOT EXISTS sponsor_gate_reset ("
+                "user_id INTEGER NOT NULL, provider TEXT NOT NULL, reset_at INTEGER NOT NULL, "
+                "PRIMARY KEY (user_id, provider))")
 
     async def _post(self, path: str, body: dict) -> tuple[int, dict | None, int]:
         """(HTTP-статус, JSON|None, duration_ms). Успешный done-лог — на стороне вызывающего."""
@@ -144,7 +154,16 @@ class PiarFlowGate:
     async def check(self, u: User, force: bool = False) -> InlineKeyboardMarkup | None:
         """None — пользователь может пользоваться ботом; иначе клавиатура с заданиями."""
         uid = int(u.id)
-        if not force and self._pass_until.get(uid, 0) > time.time():
+        reset = False
+        try:
+            reset = self.db.one("SELECT 1 FROM sponsor_gate_reset WHERE user_id=? AND provider=?",
+                                uid, "piarflow") is not None
+        except Exception:  # noqa: BLE001
+            reset = False
+        if reset:
+            self._pass_until.pop(uid, None)
+            self._pending.pop(uid, None)
+        if not force and not reset and self._pass_until.get(uid, 0) > time.time():
             slog.log_skip(log, _NET, "cache")
             return None
         pending = self._pending.get(uid)
@@ -153,6 +172,11 @@ class PiarFlowGate:
             if items is None:
                 self._pass(uid, ERROR_TTL)
                 return None
+            if reset:
+                try:
+                    self.db.exec("DELETE FROM sponsor_gate_reset WHERE user_id=? AND provider=?", uid, "piarflow")
+                except Exception:  # noqa: BLE001
+                    pass
             st = dict(items)
             left = [link for link in pending if st.get(link, "unsubscribed") not in DONE_STATUSES]
             if left:
@@ -168,6 +192,11 @@ class PiarFlowGate:
             # 403 — пользователь не может выполнить задания, 404 — заданий нет
             self._pass(uid, NO_TASKS_TTL if http_status in (403, 404) else ERROR_TTL)
             return None
+        if reset:
+            try:
+                self.db.exec("DELETE FROM sponsor_gate_reset WHERE user_id=? AND provider=?", uid, "piarflow")
+            except Exception:  # noqa: BLE001
+                pass
         items = self._items(data)
         # показанные раньше и уже выполненные — подтверждаем через /sponsors/check (там PiarFlow засчитывает)
         done_now = [link for link, s in items if s in DONE_STATUSES
@@ -189,3 +218,25 @@ class PiarFlowGate:
             tasks=len(items), statuses=slog.status_counts(s for _, s in items), result=result,
         )
         return kb
+
+
+def revert_completion(bot_dir, uid: int, link: str) -> None:
+    """Drop the local completion so the gate shows again; does not change creator UNIQUE ops."""
+    import sqlite3
+    import time
+    from pathlib import Path
+    path = Path(bot_dir) / "bot.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(SCHEMA)
+        conn.execute("DELETE FROM pf_done WHERE user_id=? AND link=?", (uid, link))
+        conn.execute("DELETE FROM pf_shown WHERE user_id=? AND link=?", (uid, link))
+        conn.execute(
+            "INSERT OR REPLACE INTO sponsor_gate_reset(user_id,provider,reset_at) VALUES(?,?,?)",
+            (uid, "piarflow", int(time.time())))
+        conn.commit()
+    finally:
+        conn.close()
+
