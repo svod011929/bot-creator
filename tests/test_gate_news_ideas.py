@@ -191,3 +191,82 @@ async def test_admin_news_preview_and_publish_copies(env):
     chats = {m.chat_id for m in copies}
     assert "@chan" in chats
     assert {ADMIN, OWNER, OTHER}.issubset(chats)
+
+
+def _fwd(uid: int, chat_id: int, chat_type: str, title: str):
+    chat = {"id": chat_id, "type": chat_type, "title": title}
+    if chat_type == "channel":
+        origin = {"type": "channel", "date": 1, "message_id": 5, "chat": chat}
+    else:
+        origin = {"type": "chat", "date": 1, "sender_chat": chat}
+    return msg_update(uid, "forwarded", forward_origin=origin)
+
+
+@pytest.fixture
+async def bound_invite_env(tmp_path, bot, session):
+    cfg = Config(
+        data_dir=tmp_path,
+        admin_ids={ADMIN},
+        chat_url="https://t.me/+inviteChat12",
+        channel_url="https://t.me/+inviteChan12",
+        channel_chat_id=-100111,
+        chat_chat_id=-100222,
+    )
+    db = DB(cfg.db_path)
+    sup = Supervisor(db, cfg, cmd=SLEEPER, creator_username="creator_bot")
+    ctx = Ctx(db=db, cfg=cfg, sup=sup, validate_token=lambda token: None, bot_username="creator_bot")
+    dp = build_dispatcher(ctx)
+
+    async def feed(update):
+        await dp.feed_update(bot, update)
+
+    yield ctx, feed, session
+    await sup.shutdown()
+    db.close()
+
+
+async def test_gate_blocks_when_invite_has_chat_id(bound_invite_env):
+    ctx, feed, session = bound_invite_env
+    session.member_status = "left"
+    await feed(msg_update(OWNER, BTN_INFO))
+    assert any("Подпишитесь" in (t or "") for t in session.texts())
+    chats = {m.chat_id for m in session.of(GetChatMember)}
+    assert chats == {-100111, -100222}
+    last = [m for m in session.of(SendMessage) if m.reply_markup][-1]
+    urls = [b.url for row in last.reply_markup.inline_keyboard for b in row if getattr(b, "url", None)]
+    assert "https://t.me/+inviteChan12" in urls
+    assert "https://t.me/+inviteChat12" in urls
+
+    session.clear()
+    await feed(cb_update(OWNER, "info:docs"))
+    assert any("документ" in (t or "").lower() or "соглаш" in (t or "").lower() or "оферт" in (t or "").lower()
+               for t in session.texts())
+    assert not any("Подпишитесь" in (t or "") for t in session.texts())
+
+
+async def test_admin_forward_binds_ids_and_enables_gate(invite_env):
+    ctx, feed, session = invite_env
+    session.member_status = "left"
+    await feed(_fwd(OWNER, -100333, "channel", "News"))
+    assert ctx.db.kv_get("gate_channel_id") is None
+    await feed(_fwd(ADMIN, -100333, "channel", "News"))
+    await feed(_fwd(ADMIN, -100444, "supergroup", "Chat"))
+    assert ctx.db.kv_get("gate_channel_id") == "-100333"
+    assert ctx.db.kv_get("gate_chat_id") == "-100444"
+    assert any("Привязано" in (t or "") for t in session.texts())
+
+    session.clear()
+    await feed(msg_update(OWNER, BTN_INFO))
+    assert any("Подпишитесь" in (t or "") for t in session.texts())
+    assert {-100333, -100444} == {m.chat_id for m in session.of(GetChatMember)}
+
+
+async def test_news_preview_uses_bound_channel_id(invite_env):
+    ctx, feed, session = invite_env
+    ctx.db.kv_set("gate_channel_id", "-100555")
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:news"))
+    session.clear()
+    await feed(msg_update(ADMIN, "Новость в частный канал"))
+    assert any("в бот и в канал" in (t or "") for t in session.texts())
+    assert not session.of(CopyMessage)

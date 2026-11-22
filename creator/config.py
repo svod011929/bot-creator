@@ -84,6 +84,8 @@ class Config:
     chat_url: str = ""
     channel_url: str = ""
     admin_url: str = ""
+    channel_chat_id: int = 0
+    chat_chat_id: int = 0
     withdraw_approver_id: int = 0   # 0 = not set: falls back to the only ADMIN_IDS entry
     withdraw_methods: tuple[str, ...] = ("card", "sbp", "usdt_trc20")
     data_dir: Path = PROJECT_ROOT / "data"
@@ -201,6 +203,8 @@ def load_config(env_file: Path | None = None) -> Config:
         admin_ids=admin_ids,
         chat_url=_support_env("CHAT_URL"),
         channel_url=_support_env("CHANNEL_URL"),
+        channel_chat_id=_int("CHANNEL_CHAT_ID", 0),
+        chat_chat_id=_int("CHAT_CHAT_ID", 0),
         admin_url=_support_env("ADMIN_URL"),
         withdraw_approver_id=_int("WITHDRAW_APPROVER_ID", 0),
         withdraw_methods=_withdraw_methods(),

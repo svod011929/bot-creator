@@ -39,9 +39,9 @@ async def ideas_home(event: Message | CallbackQuery, ctx: Ctx) -> None:
     markup = ikb(*rows)
     if isinstance(event, CallbackQuery):
         await event.answer()
-        await event.message.edit_text(text, reply_markup=markup)
+        await event.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     else:
-        await event.answer(text, reply_markup=markup)
+        await event.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data == "ideas:new")
@@ -51,6 +51,7 @@ async def ideas_new(cb: CallbackQuery, state: FSMContext) -> None:
         "Опишите идею одним сообщением (до 1000 символов).\n"
         "За принятую идею начисляется 50 ₽ на баланс.",
         reply_markup=cancel_kb(),
+        disable_web_page_preview=True,
     )
     await cb.answer()
 
@@ -68,6 +69,7 @@ async def ideas_save(message: Message, state: FSMContext, ctx: Ctx) -> None:
         "Другие пользователи смогут за неё голосовать. "
         "Если идея будет принята — вы получите 50 ₽ на баланс.",
         reply_markup=ikb([btn("💡 К идеям", "ideas")]),
+        disable_web_page_preview=True,
     )
 
 

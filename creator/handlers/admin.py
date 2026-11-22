@@ -852,8 +852,8 @@ async def news_start(cb: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Admin.news)
 async def news_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
-    from creator.handlers.gate import _username
-    channel = _username(ctx.cfg.channel_url)
+    from creator.handlers.gate import channel_dest
+    channel = channel_dest(ctx)
     await state.update_data(news_chat=message.chat.id, news_msg=message.message_id, news_channel=channel)
     where = "в бот и в канал" if channel else "только в бот (канал не настроен)"
     await message.answer(
