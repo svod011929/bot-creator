@@ -38,30 +38,53 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
-def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
-    # Группы: обзор · люди и боты · рассылки · финансы · инструменты
-    people = [btn("👤 Пользователи", "a:users"), btn("🤖 Боты", "a:bots")]
-    find = [btn("🔎 Найти бота", "a:botfind")]
-    broadcasts = [btn("📢 Конструктор", "a:bc"), btn("📢 По ботам", "a:bcb")]
-    finance = [btn("💰 Цены", "a:prices"), btn("💳 LavePay", "a:lave:0")]
-    tools = [btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")]
-    rows = [
-        [btn("📊 Статистика", "a:stats")],
-        people,
-        find,
-        broadcasts,
-        finance,
-        tools,
-    ]
+def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
+    """Submenus of the creator admin panel; every former top-level button lives in one group."""
+    groups = {
+        "people": [[btn("👤 Пользователи", "a:users"), btn("🤖 Боты", "a:bots")],
+                   [btn("🔎 Найти бота", "a:botfind")]],
+        "bc": [[btn("📢 Рассылка по конструктору", "a:bc")], [btn("📢 Рассылка по ботам", "a:bcb")]],
+        "fin": [[btn("💰 Цены", "a:prices"), btn("💳 LavePay", "a:lave:0")]],
+        "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")]],
+    }
+    integ = []
     if ctx is not None and ctx.tgrass is not None:
-        rows.append([btn("💸 TGrass", "a:tg")])
+        integ.append([btn("💸 TGrass", "a:tg")])
     if ctx is not None and ctx.piarflow is not None:
-        rows.append([btn("🚀 PiarFlow", "a:pf")])
+        integ.append([btn("🚀 PiarFlow", "a:pf")])
     if ctx is not None and getattr(ctx, "unsub", None):
-        rows.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
+        integ.append([btn("🔗 Вебхуки трансляции", "a:whhub")])
+    if integ:
+        groups["integ"] = integ
+    return groups
+
+
+GROUP_TITLES = {
+    "people": "👥 Люди и боты",
+    "bc": "📢 Рассылки",
+    "fin": "💰 Финансы",
+    "tools": "🛠 Инструменты",
+    "integ": "🔌 Интеграции",
+}
+
+
+def panel_kb(ctx: Ctx | None = None, uid: int | None = None):
+    groups = _group_rows(ctx, uid)
+    rows = [[btn("📊 Статистика", "a:stats")],
+            [btn(GROUP_TITLES["people"], "a:g:people"), btn(GROUP_TITLES["bc"], "a:g:bc")],
+            [btn(GROUP_TITLES["fin"], "a:g:fin"), btn(GROUP_TITLES["tools"], "a:g:tools")]]
+    if "integ" in groups:
+        rows.append([btn(GROUP_TITLES["integ"], "a:g:integ")])
     if ctx is not None and uid is not None and uid == ctx.cfg.approver:
         rows.append([btn("💸 Заявки на вывод", "a:wd:0")])
     return ikb(*rows)
+
+
+def group_kb(ctx: Ctx | None, uid: int | None, key: str):
+    rows = _group_rows(ctx, uid).get(key)
+    if rows is None:
+        return None
+    return ikb(*rows, [btn("⬅️ В панель", "a:main")])
 
 
 def panel_text(ctx: Ctx) -> str:
@@ -90,6 +113,17 @@ async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
                          reply_markup=panel_kb(ctx, message.from_user.id))
+
+
+@router.callback_query(F.data.startswith("a:g:"))
+async def panel_group(cb: CallbackQuery, ctx: Ctx) -> None:
+    key = cb.data[4:]
+    kb = group_kb(ctx, cb.from_user.id, key)
+    if kb is None:
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    await cb.message.edit_text(f"🛠 <b>Админ-панель</b> → {GROUP_TITLES[key]}", reply_markup=kb)
+    await cb.answer()
 
 
 @router.callback_query(F.data == "a:main")

@@ -341,6 +341,7 @@ async def test_admin_hub_screen_is_not_shown_to_owners(env):  # noqa: F811
     # admin panel has the relay/hub button
     session.clear()
     await feed(msg_update(ADMIN, "🛠 Админ-панель"))
+    await feed(cb_update(ADMIN, "a:g:integ"))
     texts = [(b.text, b.callback_data) for m in session.requests
              for kb in [getattr(m, "reply_markup", None)]
              for row in (getattr(kb, "inline_keyboard", None) or [])
