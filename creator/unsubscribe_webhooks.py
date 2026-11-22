@@ -27,6 +27,8 @@ PROVIDERS = ("tgrass", "piarflow")
 PENALTY_KIND = {"tgrass": "tgrass_penalty", "piarflow": "piarflow_penalty"}
 HUB_BOT_ID = 0
 HUB_PATH = "hub"
+SHARED_PF_BOT_ID = -1
+SHARED_PF_PATH = "all"
 TG_PASTE = "TGrass — Настройки бота → Webhook → отписка:"
 PF_PASTE = "PiarFlow — кабинет @PiarFlowBot → Webhook / API:"
 OwnerNotify = Callable[[int, str], Awaitable[None]]
@@ -109,8 +111,14 @@ class UnsubscribeService:
             return secret
 
     def url(self, bot_id: int, provider: str) -> str:
+        if provider == "piarflow" and int(bot_id) != HUB_BOT_ID:
+            return self.shared_piarflow_url()
         token = HUB_PATH if int(bot_id) == HUB_BOT_ID else str(int(bot_id))
         return f"{self.public_base()}/webhooks/{provider}/{token}/{self.ensure_secret(bot_id, provider)}"
+
+    def shared_piarflow_url(self) -> str:
+        """Один адрес PiarFlow на весь аккаунт, без секрета. Маршрут — по bot_id в теле."""
+        return f"{self.public_base()}/webhooks/piarflow"
 
     def hub_url(self, provider: str) -> str:
         return self.url(HUB_BOT_ID, provider)
@@ -124,6 +132,8 @@ class UnsubscribeService:
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=256 * 1024)
+        app.router.add_post("/webhooks/piarflow", self.handle_shared_piarflow)
+        app.router.add_post("/webhooks/piarflow/", self.handle_shared_piarflow)
         app.router.add_post("/webhooks/{provider}/{bot_id}/{secret}", self.handle)
         return app
 
@@ -139,8 +149,11 @@ class UnsubscribeService:
         secret = str(request.match_info.get("secret") or "")
         raw_bot = str(request.match_info.get("bot_id") or "")
         is_hub = raw_bot == HUB_PATH
+        is_shared_pf = provider == "piarflow" and raw_bot == SHARED_PF_PATH
         if is_hub:
             bot_id = HUB_BOT_ID
+        elif is_shared_pf:
+            bot_id = SHARED_PF_BOT_ID
         else:
             try:
                 bot_id = int(raw_bot)
@@ -148,7 +161,7 @@ class UnsubscribeService:
                 return web.json_response({"ok": False}, status=404)
         if provider not in PROVIDERS or not self._secret_ok(bot_id, provider, secret):
             return web.json_response({"ok": False}, status=404)
-        if not is_hub and self.ctx.db.bot(bot_id) is None:
+        if not is_hub and not is_shared_pf and self.ctx.db.bot(bot_id) is None:
             return web.json_response({"ok": False}, status=404)
         try:
             payload = await request.json()
@@ -159,13 +172,32 @@ class UnsubscribeService:
         if payload.get("test") is True:
             return web.json_response({"ok": True})
         try:
-            if is_hub:
+            if is_shared_pf:
+                await self.apply_shared_piarflow(payload)
+            elif is_hub:
                 await self.apply_hub(provider, payload)
             else:
                 await self.apply(provider, bot_id, payload)
         except Exception:  # noqa: BLE001
             log.exception("unsubscribe apply failed provider=%s bot_id=%s",
                           provider, HUB_PATH if is_hub else bot_id)
+            return web.json_response({"ok": False}, status=500)
+        return web.json_response({"ok": True})
+
+    async def handle_shared_piarflow(self, request: web.Request) -> web.Response:
+        """Общий вебхук PiarFlow без секрета: один адрес на все боты аккаунта."""
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False}, status=400)
+        if payload.get("test") is True:
+            return web.json_response({"ok": True})
+        try:
+            await self.apply_shared_piarflow(payload)
+        except Exception:  # noqa: BLE001
+            log.exception("shared piarflow apply failed")
             return web.json_response({"ok": False}, status=500)
         return web.json_response({"ok": True})
 
@@ -361,6 +393,35 @@ class UnsubscribeService:
         body.pop("bot_id", None)  # hub payload bot_id is the creator, not the child
         return await self.apply(provider, int(chosen["bot_id"]), body)
 
+    def resolve_piarflow_bot(self, payload: dict) -> int | None:
+        """Найти дочернего бота по Telegram bot_id из тела PiarFlow."""
+        raw = payload.get("bot_id")
+        try:
+            tg = int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            tg = 0
+        if not tg:
+            return None
+        row = self.ctx.db.one(
+            "SELECT bot_id FROM pf_bots WHERE pf_bot_id=? AND status='approved' ORDER BY bot_id LIMIT 1",
+            tg)
+        if row:
+            return int(row["bot_id"])
+        from creator.piarflow import token_bot_id
+        for b in self.ctx.db.all(
+                "SELECT b.id, b.token FROM bots b JOIN pf_bots p ON p.bot_id=b.id "
+                "WHERE p.status='approved' AND b.deleted=0"):
+            if token_bot_id(b["token"]) == tg:
+                return int(b["id"])
+        return None
+
+    async def apply_shared_piarflow(self, payload: dict):
+        """Один вебхук на все боты: маршрут по bot_id, иначе как хаб (трансляция)."""
+        bot_id = self.resolve_piarflow_bot(payload)
+        if bot_id:
+            return await self.apply("piarflow", bot_id, payload)
+        return await self.apply_hub("piarflow", payload)
+
     def _pending_url_notices(self, bot_id: int, providers: tuple[str, ...]) -> list[tuple[str, str]]:
         b = self.ctx.db.bot(bot_id)
         if not b:
@@ -442,7 +503,8 @@ def owner_url_notice_text(bot_id: int, username: str, urls: dict[str, str]) -> s
     if "tgrass" in urls:
         parts.append(f"{TG_PASTE}\n<code>{html.escape(urls['tgrass'])}</code>\n")
     if "piarflow" in urls:
-        parts.append(f"{PF_PASTE}\n<code>{html.escape(urls['piarflow'])}</code>\n")
+        parts.append(f"{PF_PASTE}\n<code>{html.escape(urls['piarflow'])}</code>\n"
+        "<i>Один адрес на весь аккаунт, без секрета.</i>\n")
     parts.append("Штраф за отписку равен начисленной награде и действует после того, "
                  "как адрес установлен.\n")
     parts.append("Никому не пересылайте эти ссылки: кто их знает, сможет слать ложные отписки.\n")

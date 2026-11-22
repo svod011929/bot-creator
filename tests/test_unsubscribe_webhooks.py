@@ -373,3 +373,53 @@ async def test_owner_and_admin_can_open_webhook_urls(env):  # noqa: F811
     await feed(cb_update(ADMIN, f"a:wh:{bot_id}"))
     shown = "\n".join(session.texts())
     assert secret in shown and f"/webhooks/tgrass/{bot_id}/" in shown
+
+
+
+@pytest.mark.asyncio
+async def test_shared_piarflow_url_is_the_same_and_routes(svc, db):
+    a = add_bot(db, token="111:AA", username="a")
+    b = add_bot(db, token="222:AA", username="b")
+    db.conn.execute(
+        "INSERT INTO pf_bots(bot_id,applicant_id,status,mode,api_key,pf_bot_id,users_at_apply,applied_at) "
+        "VALUES(?,?, 'approved','factory','k',111,0,0)", (a, OWNER))
+    db.conn.execute(
+        "INSERT INTO pf_bots(bot_id,applicant_id,status,mode,api_key,pf_bot_id,users_at_apply,applied_at) "
+        "VALUES(?,?, 'approved','factory','k',222,0,0)", (b, OWNER))
+    assert svc.url(a, "piarflow") == svc.url(b, "piarflow")
+    assert svc.url(a, "piarflow") == "https://bnbb.tech/webhooks/piarflow"
+    assert svc.shared_piarflow_url().endswith("/webhooks/piarflow")
+    credit_pf(db, a, link=LINK, reward=40)
+    seed_child(svc, a, "piarflow", link=LINK)
+    payload = {"tg_user_id": USER, "offer_link": LINK, "status": "unsubscribed", "bot_id": 111}
+    r = await svc.apply_shared_piarflow(payload)
+    assert r.applied and r.bot_id == a
+    assert db.scalar("SELECT amount FROM transactions WHERE kind='piarflow_penalty'") == -40
+
+
+@pytest.mark.asyncio
+async def test_shared_piarflow_http_ignores_unknown_and_is_idempotent(svc, db):
+    a = add_bot(db, token="111:AA", username="a")
+    db.conn.execute(
+        "INSERT INTO pf_bots(bot_id,applicant_id,status,mode,api_key,pf_bot_id,users_at_apply,applied_at) "
+        "VALUES(?,?, 'approved','factory','k',111,0,0)", (a, OWNER))
+    credit_pf(db, a, link=LINK, reward=40)
+    seed_child(svc, a, "piarflow", link=LINK)
+    secret = svc.ensure_secret(a, "piarflow")
+    payload = {"tg_user_id": USER, "offer_link": LINK, "status": "unsubscribed", "bot_id": 111}
+    unknown = {"tg_user_id": 999999, "offer_link": LINK, "status": "unsubscribed", "bot_id": 111}
+    async with TestClient(TestServer(svc.app())) as client:
+        r = await client.post("/webhooks/piarflow", data=json.dumps(unknown))
+        assert r.status == 200
+        assert db.scalar("SELECT COUNT(*) FROM unsubscribe_penalties") == 0
+        r = await client.post("/webhooks/piarflow", data=json.dumps(payload))
+        assert r.status == 200
+        r = await client.post("/webhooks/piarflow", data=json.dumps(payload))
+        assert r.status == 200
+        # old per-bot address with the secret still works; a bad secret is rejected
+        r = await client.post(f"/webhooks/piarflow/{a}/{secret}", data=json.dumps(payload))
+        assert r.status == 200
+        r = await client.post(f"/webhooks/piarflow/{a}/not-the-secret", data=json.dumps(payload))
+        assert r.status == 404
+    assert db.scalar("SELECT COUNT(*) FROM unsubscribe_penalties") == 1
+    assert db.scalar("SELECT amount FROM transactions WHERE kind='piarflow_penalty'") == -40
