@@ -74,7 +74,8 @@ class Supervisor:
         os.chmod(d, 0o700)
         tgrass_key = self.db.tgrass_key_for(bot_id)
         piarflow_key = self.db.pf_key_for(bot_id)
-        write_config(d, {
+        from creator.owner_payouts import child_flags
+        payload = {
             "bot_id": b["id"],
             "tgrass_key": tgrass_key,
             "tgrass_base_url": self.cfg.tgrass_base_url,
@@ -86,7 +87,9 @@ class Supervisor:
             "username": b["username"],
             "vip": bool(b["vip"]),
             "creator_username": self.creator_username,
-        })
+        }
+        payload.update(child_flags(self.cfg, self.db, bot_id))
+        write_config(d, payload)
         return d
 
     def is_running(self, bot_id: int) -> bool:

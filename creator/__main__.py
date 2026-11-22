@@ -19,6 +19,7 @@ from child import templates
 from child.files import write_config
 from creator.app import build_dispatcher
 from creator.billing import billing_loop
+from creator.child_payouts import ChildPayoutService
 from creator.config import PROJECT_ROOT, load_config
 from creator.db import DB
 from creator.lavepay import LavePayClient, LavePayService
@@ -87,9 +88,17 @@ async def run() -> None:
             log.info("LavePay: мерчант #%s «%s», статус %s", m.get("id"), m.get("name"), m.get("status"))
         except Exception as e:  # noqa: BLE001
             log.warning("LavePay: проверка ключа не удалась: %s", e)
+        payouts = ChildPayoutService(ctx, lave_client, notify=notify)
+        ctx.lave.payouts = payouts
+        ctx.payouts = payouts
         tasks.append(asyncio.create_task(ctx.lave.poll_loop()))
+        tasks.append(asyncio.create_task(payouts.poll_loop()))
         if cfg.lavepay_webhook_port and cfg.lavepay_webhook_secret:
             webhook_runner = await ctx.lave.start_webhook(cfg.lavepay_webhook_host, cfg.lavepay_webhook_port)
+    if getattr(ctx, "payouts", None) is None and cfg.child_lavepay_payouts:
+        payouts = ChildPayoutService(ctx, None, notify=notify)
+        ctx.payouts = payouts
+        tasks.append(asyncio.create_task(payouts.poll_loop()))
     from creator.unsubscribe_webhooks import attach, send_as_child
 
     async def notify_strict(uid: int, text: str) -> None:
@@ -119,6 +128,9 @@ async def run() -> None:
             await webhook_runner.cleanup()
         if unsub_runner:
             await unsub_runner.cleanup()
+        payouts = getattr(ctx, "payouts", None) or getattr(getattr(ctx, "lave", None), "payouts", None)
+        if payouts is not None:
+            payouts.close()
         if lave_client:
             await lave_client.close()
         for network in ("tgrass", "piarflow"):

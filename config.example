@@ -16,6 +16,12 @@ LAVEPAY_WEBHOOK_SECRET=
 WITHDRAW_APPROVER_ID=
 # Comma list of: card,sbp,usdt_trc20 (empty = all)
 WITHDRAW_METHODS=
+# Global switch for owner-shop LavePay payouts (clicker/refbot). Code default off; set 1 on the server.
+# A bot is live only after the owner connects their own shop. Auto-pay stays off. USDT TRC-20 only.
+CHILD_LAVEPAY_PAYOUTS=
+CHILD_LAVEPAY_PAYOUTS_AUTO=
+CHILD_LAVEPAY_DAILY_LIMIT_RUB=
+OWNER_PAYOUT_KEY=
 # WITHDRAW_MIN (kopecks, default 10000) and WITHDRAW_FEE_PERCENT (default 5) are also editable in admin prices
 
 # Unsubscribe webhooks (TGrass / PiarFlow). Secrets are stored in the private DB, not here.

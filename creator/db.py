@@ -237,6 +237,7 @@ class DB:
         self._savepoint_counter = 0
         self._ensure_mode_columns()
         self._ensure_unsubscribe_schema()
+        self._ensure_owner_lavepay_schema()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -271,6 +272,108 @@ class DB:
                 "bot_id INTEGER NOT NULL, provider TEXT NOT NULL, secret TEXT NOT NULL, "
                 "owner_id INTEGER NOT NULL, sent_at INTEGER NOT NULL, "
                 "PRIMARY KEY (bot_id, provider, secret))")
+
+    def _ensure_owner_lavepay_schema(self) -> None:
+        """Owner LavePay shops and unit rates. Additive only; key material is encrypted."""
+        with self._lock:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_lavepay_shops (
+                    bot_id INTEGER PRIMARY KEY,
+                    owner_id INTEGER NOT NULL,
+                    key_blob BLOB NOT NULL,
+                    merchant_id INTEGER,
+                    merchant_name TEXT,
+                    status TEXT,
+                    payouts_enabled INTEGER NOT NULL DEFAULT 0,
+                    usdt_balance TEXT,
+                    unit_kind TEXT,
+                    unit_rate TEXT,
+                    checked_at INTEGER,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_owner_lavepay_owner ON owner_lavepay_shops(owner_id)"
+            )
+
+    def owner_lavepay_shop(self, bot_id: int) -> sqlite3.Row | None:
+        return self.one("SELECT * FROM owner_lavepay_shops WHERE bot_id=?", bot_id)
+
+    def owner_lavepay_public(self, bot_id: int) -> dict | None:
+        row = self.owner_lavepay_shop(bot_id)
+        if not row:
+            return None
+        return {
+            "bot_id": row["bot_id"],
+            "owner_id": row["owner_id"],
+            "merchant_id": row["merchant_id"],
+            "merchant_name": row["merchant_name"],
+            "status": row["status"],
+            "payouts_enabled": bool(row["payouts_enabled"]),
+            "usdt_balance": row["usdt_balance"],
+            "unit_kind": row["unit_kind"],
+            "unit_rate": row["unit_rate"],
+            "checked_at": row["checked_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def upsert_owner_lavepay_shop(self, bot_id: int, owner_id: int, key_blob: bytes, *,
+                                  merchant_id: int | None, merchant_name: str | None,
+                                  status: str | None, payouts_enabled: bool,
+                                  usdt_balance: str | None) -> None:
+        ts = now()
+        with self.tx() as c:
+            prev = c.execute("SELECT unit_kind, unit_rate FROM owner_lavepay_shops WHERE bot_id=?",
+                             (bot_id,)).fetchone()
+            c.execute("DELETE FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,))
+            c.execute(
+                "INSERT INTO owner_lavepay_shops(bot_id,owner_id,key_blob,merchant_id,merchant_name,status,"
+                "payouts_enabled,usdt_balance,unit_kind,unit_rate,checked_at,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (bot_id, owner_id, key_blob, merchant_id, merchant_name, status,
+                 1 if payouts_enabled else 0, usdt_balance,
+                 prev["unit_kind"] if prev else None, prev["unit_rate"] if prev else None,
+                 ts, ts, ts),
+            )
+
+    def update_owner_lavepay_meta(self, bot_id: int, *, merchant_id: int | None = None,
+                                  merchant_name: str | None = None, status: str | None = None,
+                                  payouts_enabled: bool | None = None,
+                                  usdt_balance: str | None = None) -> None:
+        row = self.owner_lavepay_shop(bot_id)
+        if not row:
+            return
+        with self.tx() as c:
+            c.execute(
+                "UPDATE owner_lavepay_shops SET merchant_id=?, merchant_name=?, status=?, "
+                "payouts_enabled=?, usdt_balance=?, checked_at=?, updated_at=? WHERE bot_id=?",
+                (merchant_id if merchant_id is not None else row["merchant_id"],
+                 merchant_name if merchant_name is not None else row["merchant_name"],
+                 status if status is not None else row["status"],
+                 (1 if payouts_enabled else 0) if payouts_enabled is not None else row["payouts_enabled"],
+                 usdt_balance if usdt_balance is not None else row["usdt_balance"],
+                 now(), now(), bot_id),
+            )
+
+    def set_owner_lavepay_rate(self, bot_id: int, owner_id: int, unit_kind: str | None,
+                               unit_rate: str | None) -> bool:
+        with self.tx() as c:
+            row = c.execute("SELECT owner_id FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,)).fetchone()
+            if not row or row["owner_id"] != owner_id:
+                return False
+            c.execute(
+                "UPDATE owner_lavepay_shops SET unit_kind=?, unit_rate=?, updated_at=? WHERE bot_id=?",
+                (unit_kind, unit_rate, now(), bot_id),
+            )
+            return True
+
+    def delete_owner_lavepay_shop(self, bot_id: int) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,))
 
     def migrate_stars_to_rub(self) -> None:
         """Однократный перевод старой базы (суммы в Telegram Stars) в копейки по курсу 1 ⭐ = 1,5 ₽."""
@@ -600,15 +703,18 @@ class DB:
             yield row
 
     def transfer_bot(self, bot_id: int, new_owner: int) -> None:
-        with self._lock:
-            self.conn.execute("UPDATE bots SET owner_id=?, sale_price=NULL WHERE id=?", (new_owner, bot_id))
+        with self.tx() as c:
+            c.execute("UPDATE bots SET owner_id=?, sale_price=NULL WHERE id=?", (new_owner, bot_id))
+            # The previous owner's LavePay key must not follow the bot.
+            c.execute("DELETE FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,))
 
     def delete_bot(self, bot_id: int) -> None:
-        with self._lock:
-            self.conn.execute(
+        with self.tx() as c:
+            c.execute(
                 "UPDATE bots SET deleted=1, desired=0, status='stopped', sale_price=NULL, token='' WHERE id=?",
                 (bot_id,),
             )
+            c.execute("DELETE FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,))
 
     # ---------- перепродажа ----------
     def bots_for_sale(self, exclude_owner: int | None = None) -> list[sqlite3.Row]:
@@ -630,6 +736,7 @@ class DB:
             self._change_balance(c, buyer_id, -price, "resale_buy", f"Покупка бота ID {bot_id}")
             self._change_balance(c, b["owner_id"], income, "resale_sell", f"Продажа бота ID {bot_id}")
             c.execute("UPDATE bots SET owner_id=?, sale_price=NULL WHERE id=?", (buyer_id, bot_id))
+            c.execute("DELETE FROM owner_lavepay_shops WHERE bot_id=?", (bot_id,))
             return b["owner_id"], price, income
 
     # ---------- статистика ----------

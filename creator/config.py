@@ -104,6 +104,10 @@ class Config:
     webhook_public_base: str = ""   # public origin for dashboard URLs, e.g. https://bnbb.tech
     webhook_listen_host: str = "127.0.0.1"
     webhook_listen_port: int = 0    # 0 — listener off; Caddy should proxy /webhooks/* here
+    child_lavepay_payouts: bool = False  # global flag; default OFF, no real child payouts
+    child_lavepay_payouts_auto: bool = False
+    child_lavepay_daily_limit_rub: int = 0  # 0 — no platform daily cap
+    owner_payout_key: str = ""  # Fernet or passphrase; never given to children
 
     @property
     def approver(self) -> int | None:
@@ -165,6 +169,17 @@ def _withdraw_methods() -> tuple[str, ...]:
     return chosen or WITHDRAW_METHODS
 
 
+def _flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def load_config(env_file: Path | None = None) -> Config:
     load_dotenv(env_file or PROJECT_ROOT / ".env")
     admin_ids = {
@@ -203,4 +218,8 @@ def load_config(env_file: Path | None = None) -> Config:
         webhook_public_base=(os.environ.get("WEBHOOK_PUBLIC_BASE", "").strip() or "").rstrip("/"),
         webhook_listen_host=os.environ.get("WEBHOOK_LISTEN_HOST", "").strip() or "127.0.0.1",
         webhook_listen_port=_int("WEBHOOK_LISTEN_PORT", 0),
+        child_lavepay_payouts=_flag("CHILD_LAVEPAY_PAYOUTS", False),
+        child_lavepay_payouts_auto=_flag("CHILD_LAVEPAY_PAYOUTS_AUTO", False),
+        child_lavepay_daily_limit_rub=max(0, _int("CHILD_LAVEPAY_DAILY_LIMIT_RUB", 0)),
+        owner_payout_key=os.environ.get("OWNER_PAYOUT_KEY", "").strip(),
     )
