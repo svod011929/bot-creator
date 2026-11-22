@@ -19,6 +19,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.db import fmt
+from child.star_journey import StarJourney
+from child.star_views import BTN_JOURNEY, open_journey
+from child.star_views import build_router as journey_router
 from child.templates import Setting, TemplateInfo
 from child.withdrawals import is_owner
 
@@ -27,11 +30,15 @@ INFO = TemplateInfo(
     title="Звёздный бот",
     emoji="🌟",
     price_key="PRICE_STARBOT",
-    description="Пользователи получают внутренние единицы за друзей, ежедневный бонус и задания "
-                "и подают заявки владельцу на ручную выплату. Внутренний баланс не является балансом Telegram Stars.",
+    description="Маршрут дня с карточками знаний, тренировкой памяти, сериями, миссиями, коллекцией созвездий "
+                "и рейтингом искр. Владелец создаёт и планирует карточки. Игровые искры отделены от прежнего баланса и выплат.",
     settings=[
         Setting("welcome", "Приветствие", "🌟 Выполняй задания, приглашай друзей и получай внутренние единицы. "
+                "В «🌌 Созвездиях» тебя ждут карточки, память и игровая коллекция. "
                 "Заявки на выплату рассматривает владелец вручную; условия и реальные награды определяет владелец."),
+        Setting("sky_title", "Название созвездий", "Мастерская созвездий"),
+        Setting("sky_intro", "Описание созвездий", "Открывай знания, тренируй внимание и собирай свою карту неба. "
+                "Начни с отметки дня и первой карточки; искры используются только в игре."),
         Setting("currency", "Валюта", "⭐"),
         Setting("ref_reward", "Звёзд за друга", 1, "float"),
         Setting("daily_bonus", "Ежедневный бонус", 0.5, "float"),
@@ -41,6 +48,8 @@ INFO = TemplateInfo(
         Setting("required_channel", "Обязательный канал", "", "channel"),
         Setting("channel_url", "Ссылка на канал (для приватных)", "-"),
     ],
+    version=2,
+    capabilities=("daily_route", "streaks", "knowledge_cards", "memory", "constellations", "spark_ranking"),
 )
 
 BTN_EARN = "⭐ Заработать звёзды"
@@ -50,7 +59,38 @@ BTN_TOP = "🏆 Топ"
 
 DAY = 86400
 
-ADMIN_BUTTONS = [("📋 Задания", "adm:tasks")]
+ADMIN_BUTTONS = [("📋 Задания", "adm:tasks"), ("🌌 Карточки созвездий", "sky:admin:0")]
+STATE_ESCAPE_TEXTS = (BTN_JOURNEY,)
+
+
+def create_journey(app):
+    return StarJourney(app.db, owner_id=app.owner_id, owner_check=lambda uid: is_owner(app, uid))
+
+
+def pause_forms(app, uid):
+    if is_owner(app, uid):
+        app.sky.editor_pause(uid)
+
+
+def cancel_form(app, uid):
+    if is_owner(app, uid):
+        app.sky.editor_discard(uid)
+
+
+def profile_extra(app, uid):
+    s = app.sky.overview(uid)
+    p = s["profile"]
+    return (f"\n\n🌌 <b>Созвездия</b>\nИскры: {p['sparks']} · заработано: {p['earned']} · "
+            f"коллекция: {len(s['built'])}/4 · серия: {s['streak']} дн.\n"
+            "<i>Игровые искры не включены в баланс для вывода.</i>")
+
+
+def admin_stats_extra(app):
+    if not is_owner(app, app.owner_id):
+        return ""
+    s = app.sky.stats(app.owner_id)
+    return (f"\n\n🌌 <b>Созвездия</b>\nИгровых профилей: {s['players']} · доступных карточек: {s['cards']}\n"
+            f"Пройдено карточек: {s['answers']} · собрано созвездий: {s['builds']}")
 
 
 class TaskAdd(StatesGroup):
@@ -62,7 +102,7 @@ class TaskAdd(StatesGroup):
 
 
 def menu_rows(app) -> list[list[str]]:
-    return [[BTN_EARN, BTN_BONUS], [BTN_TASKS, BTN_TOP]]
+    return [[BTN_JOURNEY], [BTN_EARN, BTN_BONUS], [BTN_TASKS, BTN_TOP]]
 
 
 def check_title(text: str) -> str:
@@ -107,6 +147,7 @@ def build_router(app) -> Router:
 
     @r.message(F.text == BTN_EARN)
     async def earn(message: Message) -> None:
+        pause_forms(app, message.from_user.id)
         uid = message.from_user.id
         await message.answer(
             f"⭐ Приглашайте друзей и получайте <b>{fmt(float(app.s['ref_reward']))} {app.currency}</b> за каждого!\n\n"
@@ -116,6 +157,7 @@ def build_router(app) -> Router:
 
     @r.message(F.text == BTN_BONUS)
     async def bonus(message: Message) -> None:
+        pause_forms(app, message.from_user.id)
         uid = message.from_user.id
         u = app.db.user(uid)
         if not u:
@@ -142,6 +184,7 @@ def build_router(app) -> Router:
 
     @r.message(F.text == BTN_TASKS)
     async def tasks(message: Message) -> None:
+        pause_forms(app, message.from_user.id)
         rows = tasks_for(message.from_user.id)
         if not rows:
             await message.answer("📋 Сейчас нет доступных заданий. Загляните позже!")
@@ -199,12 +242,14 @@ def build_router(app) -> Router:
 
     @r.message(F.text == BTN_TOP)
     async def top(message: Message) -> None:
+        pause_forms(app, message.from_user.id)
         rows = app.db.all("SELECT id, full_name, balance FROM users ORDER BY balance DESC LIMIT 10")
         lines = ["🏆 <b>Топ по звёздам</b>\n"]
         for i, row in enumerate(rows, 1):
             lines.append(f"{i}. {html.escape(row['full_name'] or str(row['id']))} — {fmt(row['balance'])} {app.currency}")
         await message.answer("\n".join(lines))
 
+    r.include_router(journey_router(app))
     return r
 
 
@@ -221,6 +266,7 @@ def build_admin_router(app) -> Router:
 
     @r.callback_query(F.data == "adm:tasks")
     async def tasks(cb: CallbackQuery) -> None:
+        pause_forms(app, cb.from_user.id)
         await cb.message.answer("📋 <b>Задания</b> (нажмите, чтобы удалить)", reply_markup=tasks_kb())
         await cb.answer()
 
@@ -245,6 +291,7 @@ def build_admin_router(app) -> Router:
 
     @r.callback_query(F.data == "tadd")
     async def add(cb: CallbackQuery, state: FSMContext) -> None:
+        pause_forms(app, cb.from_user.id)
         await state.clear()
         await state.set_state(TaskAdd.waiting)
         await cb.message.answer(
@@ -256,6 +303,9 @@ def build_admin_router(app) -> Router:
     @r.message(StateFilter(TaskAdd.waiting, TaskAdd.url, TaskAdd.reward, TaskAdd.channel), F.text.in_(menu_texts))
     async def menu_during_wizard(message: Message, state: FSMContext) -> None:
         await state.clear()
+        if message.text == BTN_JOURNEY:
+            await open_journey(message, state, app)
+            return
         await message.answer("Добавление задания отменено, ничего не сохранено.", reply_markup=app.menu(message.from_user.id))
 
     @r.message(TaskAdd.waiting, ~Command("cancel"))

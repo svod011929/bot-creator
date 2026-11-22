@@ -256,6 +256,28 @@ async def test_existing_editor_saves_only_selected_field_and_channel_uses_wizard
     assert await w.state.get_state() == "Wizard:active"
 
 
+@pytest.mark.parametrize("setup", ["starbot"], indirect=True)
+async def test_star_journey_appearance_is_editable_from_creator(setup):
+    from child.core import ChildApp
+
+    w = setup
+    original_balance = w.ctx.db.user(OWNER)["balance"]
+    for key, value in (("sky_title", "My constellation workshop"), ("sky_intro", "New owner introduction")):
+        w.session.clear()
+        await w.feed(cb_update(OWNER, w.cb("group:appearance")))
+        assert w.cb("edit:" + key) in {b.callback_data for b in buttons(screen(w))}
+        await w.feed(cb_update(OWNER, w.cb("edit:" + key)))
+        await w.feed(msg_update(OWNER, value))
+    child = ChildApp(w.path)
+    try:
+        assert child.s["sky_title"] == "My constellation workshop"
+        assert child.s["sky_intro"] == "New owner introduction"
+        assert child.s["daily_bonus"] == 0.5 and child.s["ref_reward"] == 1
+        assert w.ctx.db.user(OWNER)["balance"] == original_balance
+    finally:
+        child.db.conn.close()
+
+
 @pytest.mark.parametrize("change", ["owner", "template", "key"])
 async def test_edit_submission_revalidates_current_row_and_key(setup, change):
     w = setup
