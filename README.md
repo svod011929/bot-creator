@@ -1,110 +1,279 @@
-# Telegram Bot Creator
+<!-- kododrive-readme-style -->
 
-Python/aiogram constructor hosting clicker, referral and star-themed Telegram bots.
-Creator accounting uses RUB; child units are independently configurable. Withdrawals are manual requests, not automatic transfers.
+<div align="center">
+  <img src="./assets/readme-header.svg" width="100%" alt="Bot Creator" />
+</div>
 
-## Stage 10 launch scenario and appearance
+<br/>
 
-Owners can edit welcome text, game-section titles and a first-step card from a new
-constructor studio. Six presets (two per template) stay as drafts until applied; numeric
-settings, rewards, prices and withdrawals are left untouched. An optional first-step card
-is sent only in a private chat after the existing access gate, never as a broadcast.
-Preview does not message participants. See `STAGE10_CHANGES.md` and
-`docs/PRESENTATION_STUDIO.md`. Stacked on deployed `df8a695` and keeps the Stage 1
-post-review fixes.
+<div align="center">
+  <img src="./assets/readme-meta.svg" width="100%" alt="meta" />
+</div>
 
-## Stage 9 star learning tracks
+<br/>
 
-Starbot owners can compile published knowledge cards into themed tracks of 3–12 ordered lessons.
-Players join, progress step by step, retry after a short pause, and claim a badge. Publication
-freezes a snapshot of the lessons; pausing later source cards does not change an already published
-track. Completion awards badges only and does not change cash balances, sparks, daily cards or
-withdrawals. See `STAGE9_CHANGES.md` and `docs/STAR_TRACKS.md`. Stacked on deployed `d5e1f6a`
-and keeps the Stage 1 post-review fixes.
+<p align="center">
+  <a href="https://github.com/svod011929/bot-creator"><img src="https://img.shields.io/badge/GitHub-bot--creator-0D1117?style=for-the-badge&logo=github&logoColor=26A5E4" alt="repo" /></a>
+  <a href="https://t.me/DDDDEVELOPER"><img src="https://img.shields.io/badge/Telegram-@DDDDEVELOPER-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="tg" /></a>
+  <a href="https://github.com/svod011929"><img src="https://img.shields.io/badge/Author-svod011929-7C3AED?style=for-the-badge&logo=github&logoColor=white" alt="author" /></a>
+  <img src="https://img.shields.io/badge/version-1.0.0-26A5E4?style=for-the-badge" alt="version" />
+</p>
 
-## Stage 8 weekly referral teams
+<!-- /kododrive-readme-style -->
 
-Club participants can create or join a team of up to five for the current Moscow calendar week.
-Daily check-in, new campaign answers and newly qualified friends contribute to a shared goal;
-inviting is optional. A lasting badge needs the shared goal, at least two members and a personal
-contribution. Team scores never change cash balances or club points, and joining does not set a
-referrer or send messages. Owners get a weekly report and can pause new entries from the
-constructor. See `STAGE8_CHANGES.md` and `docs/REFERRAL_TEAMS.md`. Stacked on deployed
-`4b9eefc` and keeps the Stage 1 post-review fixes.
+# Bot Creator
 
-## Stage 7 clicker events
+Конструктор Telegram-ботов на **Python 3.10+ / aiogram 3** и **SQLite**. Пользователь выбирает шаблон, подключает токен своего бота и запускает его с хостингом, оплатой, обязательной подпиской и заработком на показах — не оставляя Telegram.
 
-Clicker bots gain scheduled challenges: new-tap, expedition and distinct-route goals, a one-time
-XP reward and a collectible badge. Players must join first; earlier clicks and already started
-expeditions do not count. Owners create, preview, publish, pause and copy events from the
-constructor. Publication reserves dates and fixes conditions. XP stays in the game ledger and
-does not change wallets, cash rewards or withdrawals. See `STAGE7_CHANGES.md` and
-`docs/CLICKER_EVENTS.md`. Stacked on deployed `09294a2` and keeps the Stage 1 post-review fixes.
+Живой конструктор: [@DDDCReatorBot](https://t.me/DDDCReatorBot). Автор: [KodoDrive](https://github.com/svod011929) · [Telegram](https://t.me/DDDDEVELOPER)
 
-## Stage 6 demos and participant analytics
+<div align="center">
 
-Template creation cards now link to the owner's demo bots. Owners can open a local activity
-report: unique active accounts, template milestones and closed-day D1/D7 returns. Collection
-starts with this version, excludes the owner and group chats, stores no message texts or
-amounts, and never changes wallets, rewards or withdrawals. A recording error does not cancel
-gameplay. See `STAGE6_CHANGES.md` and `docs/DEMOS_AND_ENGAGEMENT.md`. Stacked on deployed
-`f9fac10` and keeps the Stage 1 post-review fixes.
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![aiogram](https://img.shields.io/badge/aiogram-3.x-009688?style=for-the-badge)
+![SQLite](https://img.shields.io/badge/SQLite-aiosqlite-003B57?style=for-the-badge&logo=sqlite)
 
-## Stage 5 Creator content
+</div>
 
-Owners can manage referral-club campaigns and star-journey cards from the constructor:
-catalog, drafts, a participant preview that awards nothing, calendar, pause/resume and copy.
-Creator forms are stored separately in an additive `creator_content_forms` table in the child
-database and survive constructor restarts. Viewing does not migrate, start a child, pay for
-hosting or send messages. Clicker catalogs are unchanged. Money, withdrawal and reward rules
-are unchanged. See `STAGE5_CHANGES.md` and `docs/CREATOR_CONTENT.md`. Stacked on deployed
-`0010d45` and keeps the Stage 1 post-review fixes.
+<div align="center">
+  <img src="./assets/readme-features.svg" width="100%" alt="features" />
+</div>
 
-## Stage 4 Star journey
+---
 
-Star bot now has daily routes, 24 starter knowledge cards, memory exercises, check-in streaks, nine missions,
-four collectible constellations and spark rankings. Owners can draft, edit, schedule and publish their own cards.
-Game sparks use an independent ledger and do not change the existing wallet or withdrawal rules.
-See `STAGE4_CHANGES.md` and `docs/STAR_JOURNEY.md`. This package is stacked on deployed `472cc14` and keeps the
-Stage 1 post-review fixes (draft rollback and child environment whitelist).
+## 📋 Содержание
 
-## Stage 3 referral club
+- [Возможности](#-возможности)
+- [Стек и архитектура](#-стек-и-архитектура)
+- [Структура проекта](#-структура-проекта)
+- [Установка и запуск](#-установка-и-запуск)
+- [Переменные окружения](#-переменные-окружения)
+- [Тесты](#-тесты)
+- [Деплой](#-деплой)
+- [Автор](#-автор)
+- [Проекты KodoDrive](#проекты-kododrive)
 
-The referral template now includes owner-managed campaigns, persistent draft editing, onboarding, campaign quizzes,
-qualified invitations, goals, badges and a club ranking. Club points have their own ledger and are separate from
-the existing withdrawal balance. New users who open a campaign link (`c_TOKEN`) get the same first-touch cash
-referrer as `r<id>` links; existing `ref_reward` is credited after the same eligibility check. See
-`STAGE3_CHANGES.md` and `docs/REFERRAL_CLUB.md`. This package is stacked on deployed `542b6f8` and keeps the
-Stage 1 post-review fixes (draft rollback and child environment whitelist).
+## ✨ Возможности
 
-## Stage 2 clicker adventure
+### 🧩 Шаблоны дочерних ботов
 
-The clicker now includes four timed expeditions, eleven missions, three skill branches, a collection,
-achievements and XP rankings. Adventure XP is separate from the existing bot wallet. See `STAGE2_CHANGES.md`
-and `docs/CLICKER_ADVENTURE.md` for schema, compatibility, player flow and owner settings.
-This package is stacked on the deployed Stage 1 release and keeps the post-review fixes
-(draft rollback and child environment whitelist).
+В конструкторе четыре готовых шаблона. У каждого — свой игровой или рабочий контур, карточка бота и настройки владельца:
 
-## Stage 1 reliability package
+- **Кликер** — тапы, миссии, экспедиции, XP и расписанные события. Демо: [@DDDClickerBot](https://t.me/DDDClickerBot)
+- **Реферальный клуб** — кампании, викторины, команды недели и рейтинг клуба
+- **Star-бот** — маршруты, карточки знаний, созвездия и тематические обучающие треки. Демо: [@DDDFreeStarsBot](https://t.me/DDDFreeStarsBot)
+- **Микрозадачи** — задания и выводы. Демо: [@DDDMicroTasksBot](https://t.me/DDDMicroTasksBot)
 
-This tree includes local fixes over snapshot `9d485a7`; see `STAGE1_CHANGES.md` for scope, additive schema changes,
-compatibility notes and validation. It has not been deployed. Development dependencies tested on CPython 3.12.14
-are pinned in `requirements-dev.lock.txt` (`pip install -r requirements-dev.lock.txt`). No production dependency
-upgrade or payment-policy change is implied by that lockfile.
+Владелец оформляет приветствие и внешний вид в студии запуска, ведёт каталоги контента и смотрит активность пользователей.
 
-## Local development
-Python 3.11+. Install `requirements-dev.txt`; copy `config.example` to a private `.env` and configure only when intentionally connecting services.
-Run `pytest`, `ruff check .`, `python -m compileall -q creator child`, `python -m creator --dry-run`. Tests use temporary SQLite and fake Telegram/provider sessions.
+### 🏠 Хостинг и VIP
 
-No production data, private deployment instructions, credentials or previous private Git history are included. This is a clean source snapshot. Integration code does not prove provider end-to-end health.
+Создание бота оплачивается по тарифу шаблона. Дальше списываются дни хостинга, есть стартовый пакет дней и отдельный VIP-тариф. Цены задаются в окружении и правятся в админке, без правок кода.
 
-## Creator source sponsors (admin only)
+### 💳 Платежи
 
-`/admin` → **📡 Источники ОП** → **TGrass / PiarFlow** → **🔑 Задать / заменить ключ**.
-Enter the source's API key, then press **💾 Сохранить**. The bot attempts to delete the incoming message, but Telegram chats are not a vault or end-to-end encrypted; deletion cannot be guaranteed. Never paste real keys in issues, pull requests or this repository. Use private server-side configuration if chat entry is unsuitable.
+Пополнение баланса конструктора и оплаты идут через [LavePay](https://t.me/laveshka?startapp=ref_p8lzxfvu). Владелец дочернего бота может подключить свой магазин для выводов USDT TRC-20. Вывод заработанного в конструкторе — заявками, с подтверждением назначенного сотрудника. Автоматически деньги никуда не уходят.
 
-Precedence: server `TGRASS_HUB_API_KEY` / `PIARFLOW_HUB_API_KEY` → manually saved private source → existing legacy autohub cache → legacy autohub registration with factory credentials. Server keys are read-only in the bot, so a manual entry is never silently ignored. Save/remove requires confirmation; unreadable configuration fails closed. Removing a manual key returns to an older source/autohub possibility, not revocation or global disable.
+### 📣 Обязательная подписка и источники трафика
 
-A manually configured source also works without factory credentials. New approvals still try child factory registration when possible and fall back to the creator source. Existing approved bots keep their stored keys; changing/removing this setting does not mass-rotate children or provider credentials. A disabled relay bot takes the current source when explicitly re-approved through the existing management workflow. No live validation is implied by a saved key. The feed consists of whatever sponsors the network assigns to the source, **not exclusively your own advertising campaigns**.
+В дочерних ботах подключаются **TGrass** и **PiarFlow**: задания на подписку, награды, вебхуки отписок и штрафы. Ключи и токены источников живут только у конструктора, в процесс дочернего бота они не передаются.
 
-Settings/status views never contact providers, create invoices, alter rewards, or update child configurations. No new real key/provider registration is required to install this code. Configure only intentionally after installation. Public PiarFlow contract: https://piarflow.com/api-docs and https://piarflow.com/llms.txt.
+### 📡 Заработок на показах (MGRAM)
+
+Владелец может подключить заработок на показах рекламы в своём боте. Партнёрский ключ хранится только в окружении конструктора и не попадает в дочерний процесс.
+
+### 💡 Идеи и обратная связь
+
+Пользователи предлагают идеи и голосуют за них в разделе «Информация». Если администратор принимает идею, автор один раз получает награду на баланс. Размер награды настраивается в админке (по умолчанию 50 ₽).
+
+### 📰 Новости
+
+Из админки можно опубликовать новость: сообщение уходит пользователям конструктора и, если бот — администратор канала, дублируется в канал.
+
+### 🔒 Подписка на канал и чат конструктора
+
+Опциональный входной фильтр: пользователь подписывается на канал и чат конструктора, чтобы пользоваться меню. Админы, команда `/start` и юридические документы проверку не проходят. Работают публичные `@username` и закрытые пригласительные ссылки (для закрытых конструктор должен быть администратором, нужен числовой ID чата). По умолчанию фильтр выключен и включается в настройках.
+
+### 📄 Документы
+
+В «Информации» — пользовательское соглашение, политика конфиденциальности и оферта: короткий текст в чате и полная версия в PDF.
+
+### 🛠 Админ-панель
+
+Панель доступна только администраторам, внутри Telegram:
+
+- пользователи, поиск, журнал операций;
+- рассылки и новости;
+- финансы, заявки на вывод, экран «Цены и тарифы»;
+- источники TGrass / PiarFlow;
+- идеи пользователей;
+- настройки: обязательная подписка, контакты поддержки, награда за идеи.
+
+## 🏗 Стек и архитектура
+
+- **Язык и фреймворк:** Python 3.10+, aiogram 3
+- **База:** SQLite (учёт конструктора отдельно от баз дочерних ботов)
+- **Процессы:** конструктор запускает дочерние боты через супервизор
+- **Режимы дочерних ботов** (`CHILD_RUNTIME`):
+  - `process` — отдельный процесс на каждый бот (по умолчанию);
+  - `shared` — один worker-процесс и Unix-сокет, удобнее при большом числе ботов
+
+Секреты конструктора (токен, платёжные ключи, ключи источников, партнёрский ключ, ключ шифрования выводов) в окружение дочернего процесса не передаются: туда попадает только явный белый список переменных.
+
+## 📁 Структура проекта
+
+```
+bot-creator/
+├── creator/          # конструктор: хендлеры, биллинг, супервизор, интеграции
+├── child/            # шаблоны и рантайм дочерних ботов
+├── tests/            # pytest
+├── docs/             # описания шаблонов и студий
+├── scripts/          # вспомогательные проверки
+├── .env.example      # имена переменных, без значений
+├── requirements.txt
+└── pyproject.toml
+```
+
+Запуск конструктора: `python -m creator`. Проверка без Telegram: `python -m creator --dry-run`.
+
+## 🚀 Установка и запуск
+
+### 1. Клонировать репозиторий
+
+```bash
+git clone https://github.com/svod011929/bot-creator.git
+cd bot-creator
+```
+
+### 2. Установить зависимости
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Настроить окружение
+
+Скопируйте `.env.example` в `.env` и заполните значения локально. Файл `.env` в репозиторий не коммитится. Токены, ключи и секреты вебхуков нельзя публиковать в чате и в git.
+
+```bash
+cp .env.example .env
+```
+
+Минимум для запуска: `BOT_TOKEN` и `ADMIN_IDS`. Остальные переменные подключают платежи, источники, вебхуки и тарифы.
+
+### 4. Запустить
+
+```bash
+python -m creator
+```
+
+Или только сборка и проверка шаблонов, без обращения к Telegram:
+
+```bash
+python -m creator --dry-run
+```
+
+## ⚙️ Переменные окружения
+
+Ниже только **имена**. Значения задаются в локальном `.env`, в репозитории их нет.
+
+### Основные
+
+| Переменная | Назначение |
+| --- | --- |
+| `BOT_TOKEN` | Токен бота-конструктора |
+| `ADMIN_IDS` | Telegram ID администраторов |
+| `ADMIN_URL` | Ссылка на администратора в «Информации» |
+| `CHAT_URL` | Ссылка на чат конструктора |
+| `CHANNEL_URL` | Ссылка на канал конструктора |
+| `CHANNEL_CHAT_ID` | Числовой ID канала (для закрытых ссылок) |
+| `CHAT_CHAT_ID` | Числовой ID чата (для закрытых ссылок) |
+| `DATA_DIR` | Каталог данных и баз |
+| `LAUNCH_DATE` | Дата запуска, если нужна в интерфейсе |
+| `LOG_LEVEL` | Уровень логов |
+| `CHILD_RUNTIME` | `process` или `shared` |
+
+### Тарифы
+
+`PRICE_CLICKER`, `PRICE_REFBOT`, `PRICE_STARBOT`, `PRICE_MICROTASKS`, `HOSTING_DAY_PRICE`, `START_HOSTING_DAYS`, `VIP_PRICE`, `REF_PERCENT`, `RESALE_FEE_PERCENT`
+
+Их же можно менять в админке, на экране «Цены и тарифы».
+
+### Платежи и выводы
+
+`LAVEPAY_API_KEY`, `LAVEPAY_BASE_URL`, `LAVEPAY_WEBHOOK_SECRET`, `LAVEPAY_WEBHOOK_HOST`, `LAVEPAY_WEBHOOK_PORT`, `WITHDRAW_APPROVER_ID`, `WITHDRAW_METHODS`, `CHILD_LAVEPAY_PAYOUTS`, `CHILD_LAVEPAY_PAYOUTS_AUTO`, `CHILD_LAVEPAY_DAILY_LIMIT_RUB`, `OWNER_PAYOUT_KEY`
+
+### Источники трафика и показы
+
+`TGRASS_FACTORY_TOKEN`, `TGRASS_OWNER_ID`, `TGRASS_OWNER_USERNAME`, `TGRASS_HUB_API_KEY`, `TGRASS_BASE_URL`, `TGRASS_REWARD`, `TGRASS_MIN_USERS`, `PIARFLOW_TOKEN`, `PIARFLOW_HUB_API_KEY`, `PIARFLOW_BASE_URL`, `PIARFLOW_REWARD`, `PIARFLOW_MIN_USERS`, `MGRAM_PARTNER_API_KEY`
+
+### Вебхуки
+
+`WEBHOOK_PUBLIC_BASE`, `WEBHOOK_LISTEN_HOST`, `WEBHOOK_LISTEN_PORT`
+
+## 🧪 Тесты
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Дополнительно в `requirements-dev.txt` есть Ruff. Тесты не ходят во внешние платёжные системы и не требуют боевых токенов.
+
+## 🚢 Деплой
+
+Краткие правила, без привязки к конкретной машине:
+
+1. Держите `.env`, базы и логи вне git. В публичный репозиторий попадает только пример с именами переменных.
+2. Перед обновлением сделайте резервную копию кода, базы и конфигурации.
+3. Поставьте зависимости в виртуальное окружение и запускайте `python -m creator` через systemd или другой менеджер процессов.
+4. Для многих дочерних ботов удобен `CHILD_RUNTIME=shared`.
+5. Если включены вебхуки, наружу должна быть доступна только точка из `WEBHOOK_PUBLIC_BASE`.
+6. Не переносите секреты конструктора в конфиги дочерних ботов и не публикуйте их в переписке.
+
+## 👤 Автор
+
+[svod011929](https://github.com/svod011929) · [KodoDrive](https://t.me/KodoDriveBio) · [@DDDDEVELOPER](https://t.me/DDDDEVELOPER)
+
+<!-- kododrive-projects-block -->
+
+## Проекты KodoDrive
+
+Другие проекты автора: [профиль @svod011929](https://github.com/svod011929) · [Telegram](https://t.me/DDDDEVELOPER)
+
+### VPN и инфраструктура
+
+- [BuryatVPN — VPN-сервис + Telegram](https://github.com/svod011929/buryatvpn)
+- [VPN Server Installer — VLESS + TLS](https://github.com/svod011929/vpn-server-installer)
+- [3X-UI Auto Installer](https://github.com/svod011929/3x-ui-auto-installer)
+- [AWG Bot Installer — AmneziaWG](https://github.com/svod011929/awg-bot-installer)
+- [RemnaShop Installer](https://github.com/svod011929/remnashop-installer)
+- [VPN Auto Installer — панели](https://github.com/svod011929/vpn-auto-installer)
+- [VPNHubBot — Telegram VPN-бот](https://github.com/svod011929/VPNHubBot)
+
+### Telegram и автоматизация
+
+- [KDS Server Panel — SSH из Telegram](https://github.com/svod011929/KDS_Server_Panel)
+- [Telegram → VK Poster](https://github.com/svod011929/telegram-to-vk-poster)
+- [KDS Parser CryptoBot](https://github.com/svod011929/kds_parser_cryptobot)
+- [Auction Bot](https://github.com/svod011929/auction-bot)
+- [Invest Bot](https://github.com/svod011929/invest-bot)
+- [Crypto Check Bot](https://github.com/svod011929/crypto-check-bot)
+- [KodoRefStarsBot](https://github.com/svod011929/KodoRefStarsBot)
+- [KodoStars](https://github.com/svod011929/KodoStars)
+- **Bot Creator** ← ты здесь
+
+### Магазины и финансы
+
+- [KodoCashFlow](https://github.com/svod011929/KodoCashFlow)
+- [Telegram Crypto Shop](https://github.com/svod011929/telegram-crypto-shop)
+- [TalkProfit](https://github.com/svod011929/talkprofit)
+
+### Сайты
+
+- [KodoDrive Portfolio](https://github.com/svod011929/kododrive-portfolio)
+- [kododrive.github.io](https://github.com/svod011929/kododrive.github.io)
+
+<!-- /kododrive-projects-block -->
