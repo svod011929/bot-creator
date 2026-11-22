@@ -10,6 +10,8 @@ from creator.handlers import (
     content,
     create,
     engagement,
+    gate,
+    ideas,
     info,
     lavepay,
     mgram,
@@ -47,6 +49,8 @@ def build_routers() -> list[Router]:
         withdrawals.router,
         cabinet.router,
         resale.router,
+        gate.router,
+        ideas.router,
         info.router,
         mgram.router,
     ]

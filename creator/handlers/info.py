@@ -89,6 +89,7 @@ def info_kb(ctx: Ctx):
         links,
         [btn("❓ Помощь", "info:help")],
         [btn("📄 Документы", "info:docs")],
+        [btn("💡 Идеи и обратная связь", "ideas")],
         [btn("⛔ Оповестить о проблеме", "info:report")],
         [admin],
     )

@@ -235,7 +235,10 @@ async def test_cabinet_partners_info(env):
     info = session.of(SendMessage)[-1]
     assert "Работаем:" in info.text and "Пользователей всего: 1" in info.text and "Ботов запущено: 0" in info.text
     labels = [b.text for row in info.reply_markup.inline_keyboard for b in row]
-    assert labels == ["💬 Чат", "📢 Канал", "❓ Помощь", "📄 Документы", "⛔ Оповестить о проблеме", "👑 Администратор"]
+    assert labels == [
+        "💬 Чат", "📢 Канал", "❓ Помощь", "📄 Документы",
+        "💡 Идеи и обратная связь", "⛔ Оповестить о проблеме", "👑 Администратор",
+    ]
 
     session.clear()
     await feed(cb_update(OWNER, "info:report"))
