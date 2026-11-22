@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS bots (
     deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_bots_owner ON bots(owner_id, deleted);
+CREATE TABLE IF NOT EXISTS mgram_bots (
+    bot_id INTEGER PRIMARY KEY,
+    mgram_bot_id INTEGER,
+    username TEXT,
+    status TEXT,
+    category TEXT,
+    api_key_shown INTEGER NOT NULL DEFAULT 0,
+    registered_at INTEGER NOT NULL,
+    last_sync_at INTEGER,
+    FOREIGN KEY (bot_id) REFERENCES bots(id)
+);
+
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -995,3 +1007,23 @@ class DB:
         with self._lock:
             self.conn.execute("UPDATE drafts SET token='' WHERE used=1 AND token<>''")
             self.conn.execute("DELETE FROM drafts WHERE used=0 AND created_at<?", (now() - max_age,))
+
+    def mgram_save(self, bot_id: int, mgram_bot_id: int | None, username: str | None,
+                   status: str | None, category: str | None, api_key_shown: bool = False) -> None:
+        ts = now()
+        self.conn.execute(
+            """INSERT INTO mgram_bots (bot_id, mgram_bot_id, username, status, category,
+                   api_key_shown, registered_at, last_sync_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(bot_id) DO UPDATE SET
+                 mgram_bot_id=excluded.mgram_bot_id, username=excluded.username,
+                 status=excluded.status, category=excluded.category,
+                 api_key_shown=MAX(mgram_bots.api_key_shown, excluded.api_key_shown),
+                 last_sync_at=excluded.last_sync_at""",
+            (bot_id, mgram_bot_id, username, status, category, int(api_key_shown), ts, ts),
+        )
+        self.conn.commit()
+
+    def mgram_get(self, bot_id: int) -> dict | None:
+        row = self.one("SELECT * FROM mgram_bots WHERE bot_id=?", bot_id)
+        return dict(row) if row else None

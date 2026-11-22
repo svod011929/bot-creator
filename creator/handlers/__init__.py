@@ -12,6 +12,7 @@ from creator.handlers import (
     engagement,
     info,
     lavepay,
+    mgram,
     mybots,
     owner_payouts,
     piarflow,
@@ -47,6 +48,7 @@ def build_routers() -> list[Router]:
         cabinet.router,
         resale.router,
         info.router,
+        mgram.router,
     ]
     for r in routers:  # позволяет собирать диспетчер повторно (тесты, --dry-run)
         r._parent_router = None

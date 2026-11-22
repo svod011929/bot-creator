@@ -91,6 +91,7 @@ class Config:
     log_level: str = "INFO"
     prices: dict[str, int] = field(default_factory=lambda: dict(PRICE_DEFAULTS))
     lavepay_api_key: str = ""
+    mgram_partner_api_key: str = ""
     lavepay_base_url: str = "https://laveshka.io/merchant/v1"
     lavepay_webhook_secret: str = ""
     lavepay_webhook_host: str = "127.0.0.1"
@@ -132,6 +133,10 @@ class Config:
     @property
     def lavepay_enabled(self) -> bool:
         return bool(self.lavepay_api_key)
+
+    @property
+    def mgram_enabled(self) -> bool:
+        return bool(self.mgram_partner_api_key)
 
     @property
     def db_path(self) -> Path:
@@ -204,6 +209,7 @@ def load_config(env_file: Path | None = None) -> Config:
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip() or "INFO",
         prices={k: _int(k, v) for k, v in PRICE_DEFAULTS.items()},
         lavepay_api_key=os.environ.get("LAVEPAY_API_KEY", "").strip(),
+        mgram_partner_api_key=os.environ.get("MGRAM_PARTNER_API_KEY", "").strip(),
         lavepay_base_url=(os.environ.get("LAVEPAY_BASE_URL", "").strip()
                           or "https://laveshka.io/merchant/v1").rstrip("/"),
         lavepay_webhook_secret=os.environ.get("LAVEPAY_WEBHOOK_SECRET", "").strip(),
