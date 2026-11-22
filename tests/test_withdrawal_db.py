@@ -164,10 +164,13 @@ def test_migration_preserves_existing_user_records_and_balances(tmp_path):
         connection.executescript(SCHEMA.split('CREATE TABLE IF NOT EXISTS withdrawals')[0])
         connection.execute('INSERT INTO users(id,username,full_name,referrer_id,balance,ref_rewarded,created_at) '
                            'VALUES(10,?,?,?,?,?,?)', ('fake', 'test', 20, 17.25, 1, 99))
+        user_cols = [d[0] for d in connection.execute('PRAGMA table_info(users)').fetchall()]
         before = connection.execute('SELECT * FROM users').fetchall()
         old_withdrawals = connection.execute('SELECT * FROM withdrawals ORDER BY id').fetchall()
     db = ChildDB(path)
-    assert [tuple(row) for row in db.all('SELECT * FROM users')] == before
+    after = db.all('SELECT * FROM users')
+    assert [tuple(row[c] for c in user_cols) for row in after] == before
+    assert all(row['banned'] == 0 for row in after)
     assert [tuple(row)[:6] for row in db.all('SELECT * FROM withdrawals ORDER BY id')] == old_withdrawals
     db.conn.close()
 

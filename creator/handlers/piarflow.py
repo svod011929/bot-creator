@@ -183,22 +183,48 @@ async def pf_main(cb: CallbackQuery, ctx: Ctx) -> None:
     await cb.answer()
 
 
+PAGE = 10
+
 @router.callback_query(F.data.startswith("a:pfl:"))
 async def pf_list(cb: CallbackQuery, ctx: Ctx) -> None:
-    status = cb.data.split(":")[2]
+    parts = cb.data.split(":")
+    if len(parts) < 3:
+        await cb.answer("Кнопка устарела", show_alert=True)
+        return
+    status = parts[2]
+    page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
     rows = ctx.db.pf_list(status)
+    total = len(rows)
+    pages = max(1, -(-total // PAGE))
+    page = max(0, min(page, pages - 1))
     if status == "pending":
         if not rows:
             await cb.answer("Заявок нет", show_alert=True)
             return
         await cb.answer()
-        for t in rows[:20]:
+        slice_ = rows[page * PAGE:(page + 1) * PAGE]
+        for t in slice_:
             await cb.message.answer(app_text(ctx, t), reply_markup=app_kb(t["bot_id"]))
+        if pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(btn("⬅️", f"a:pfl:pending:{page - 1}"))
+            if page < pages - 1:
+                nav.append(btn("➡️", f"a:pfl:pending:{page + 1}"))
+            await cb.message.answer(f"Стр. {page + 1}/{pages}", reply_markup=ikb(nav, [btn("⬅️ Назад", "a:pf")]))
         return
+    slice_ = rows[page * PAGE:(page + 1) * PAGE]
     kb = [[btn(f"ID {t['bot_id']} @{t['username'] or '—'} | заданий {ctx.db.pf_stats(t['bot_id'])[0]}",
-               f"a:pfb:{t['bot_id']}")] for t in rows[:40]]
+               f"a:pfb:{t['bot_id']}")] for t in slice_]
+    nav = []
+    if page > 0:
+        nav.append(btn("⬅️", f"a:pfl:{status}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(btn("➡️", f"a:pfl:{status}:{page + 1}"))
+    if nav:
+        kb.append(nav)
     kb.append([btn("⬅️ Назад", "a:pf")])
-    await _edit(cb, f"{STATUS.get(status, status).capitalize()}: {len(rows)}", ikb(*kb))
+    await _edit(cb, f"{STATUS.get(status, status).capitalize()}: {total} · стр. {page + 1}/{pages}", ikb(*kb))
     await cb.answer()
 
 

@@ -87,6 +87,8 @@ class ChildDB:
                     time.sleep(0.02)
             self.conn.executescript(SCHEMA)
             self._migrate_withdrawals()
+            self._ensure_banned_column()
+            self._ensure_owner_actions()
         except BaseException:
             self.conn.close()
             raise
@@ -258,6 +260,77 @@ class ChildDB:
         self.exec("UPDATE users SET blocked=1 WHERE id=?", uid)
 
     # ---- выводы ----
+    def _ensure_banned_column(self) -> None:
+        """Additive: users.banned for owner moderation (distinct from blocked)."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(users)")}
+        if "banned" not in cols:
+            self.conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
+
+    def _ensure_owner_actions(self) -> None:
+        """Additive journal of owner admin actions. Never stores secrets."""
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS owner_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT,
+                detail TEXT,
+                created_at INTEGER NOT NULL
+            )"""
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_owner_actions_time ON owner_actions(created_at DESC, id DESC)"
+        )
+
+    def log_owner(self, owner_id: int, action: str, target: str = "", detail: str = "") -> None:
+        with self.lock:
+            self.conn.execute(
+                "INSERT INTO owner_actions(owner_id,action,target,detail,created_at) VALUES(?,?,?,?,?)",
+                (owner_id, action[:64], (target or "")[:128], (detail or "")[:500], now()),
+            )
+
+    def owner_actions(self, limit: int = 10, offset: int = 0) -> list[sqlite3.Row]:
+        return self.all(
+            "SELECT * FROM owner_actions ORDER BY id DESC LIMIT ? OFFSET ?",
+            limit, offset,
+        )
+
+    def owner_actions_count(self) -> int:
+        return self.scalar("SELECT COUNT(*) FROM owner_actions") or 0
+
+
+    def set_banned(self, uid: int, banned: bool) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE users SET banned=? WHERE id=?", (int(banned), uid))
+
+    def is_banned(self, uid: int) -> bool:
+        row = self.one("SELECT banned FROM users WHERE id=?", uid)
+        return bool(row and row["banned"])
+
+    def user_list(self, limit: int = 10, offset: int = 0, search: str = "") -> list[sqlite3.Row]:
+        if search:
+            like = f"%{search}%"
+            return self.all(
+                "SELECT id, username, full_name, balance, banned, blocked, created_at FROM users "
+                "WHERE id=? OR username LIKE ? OR full_name LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                int(search) if search.isdigit() else -1, like, like, limit, offset,
+            )
+        return self.all(
+            "SELECT id, username, full_name, balance, banned, blocked, created_at FROM users "
+            "ORDER BY id DESC LIMIT ? OFFSET ?",
+            limit, offset,
+        )
+
+    def user_count(self, search: str = "") -> int:
+        if search:
+            like = f"%{search}%"
+            return self.scalar(
+                "SELECT COUNT(*) FROM users WHERE id=? OR username LIKE ? OR full_name LIKE ?",
+                int(search) if search.isdigit() else -1, like, like,
+            ) or 0
+        return self.scalar("SELECT COUNT(*) FROM users") or 0
+
+
     def create_withdrawal(self, uid: int, amount: float, details: str, *, currency: str,
                           method: str | None = None, payout: dict | None = None) -> int | None:
         if not math.isfinite(amount) or amount <= 0:

@@ -79,6 +79,24 @@ async def start(message: Message, command: CommandObject, state: FSMContext, ctx
         ctx.db.upsert_user(u.id, u.username, u.full_name, None)
         await open_from_start(message, ctx, bot_id, wid)
         return
+    for prefix, label in (("events_", "События"), ("teams_", "Команды"),
+                          ("tracks_", "Треки"), ("pres_", "Оформление")):
+        if command.args and command.args.startswith(prefix):
+            try:
+                bot_id = int(command.args.removeprefix(prefix))
+            except ValueError:
+                await message.answer("Бот не найден")
+                return
+            ctx.db.upsert_user(u.id, u.username, u.full_name, None)
+            b = ctx.db.bot(bot_id)
+            if not b or b["owner_id"] != u.id:
+                await message.answer("Бот не найден или вы не владелец.")
+                return
+            await message.answer(
+                f"🔗 {label} бота ID {bot_id}. Откройте карточку бота в «Мои боты» для управления.",
+                reply_markup=main_kb(ctx.is_admin(u.id)),
+            )
+            return
     ref = None
     if command.args and command.args.startswith("ref") and command.args[3:].isdigit():
         ref = int(command.args[3:])

@@ -238,6 +238,7 @@ class DB:
         self._ensure_mode_columns()
         self._ensure_unsubscribe_schema()
         self._ensure_owner_lavepay_schema()
+        self._ensure_admin_actions()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -320,6 +321,30 @@ class DB:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    def lavepay_shops_summary(self, limit: int = 20, offset: int = 0) -> list[dict]:
+        """Public summary only — never returns key_blob."""
+        rows = self.all(
+            "SELECT bot_id, owner_id, merchant_name, status, payouts_enabled, usdt_balance, unit_rate "
+            "FROM owner_lavepay_shops ORDER BY bot_id DESC LIMIT ? OFFSET ?",
+            limit, offset,
+        )
+        out = []
+        for r in rows:
+            out.append({
+                "bot_id": r["bot_id"],
+                "owner_id": r["owner_id"],
+                "merchant_name": r["merchant_name"] or "—",
+                "status": r["status"] or "—",
+                "payouts_enabled": bool(r["payouts_enabled"]),
+                "usdt_balance": r["usdt_balance"] or "—",
+                "unit_rate": r["unit_rate"],
+            })
+        return out
+
+    def lavepay_shops_count(self) -> int:
+        return self.scalar("SELECT COUNT(*) FROM owner_lavepay_shops") or 0
+
 
     def upsert_owner_lavepay_shop(self, bot_id: int, owner_id: int, key_blob: bytes, *,
                                   merchant_id: int | None, merchant_name: str | None,
@@ -489,6 +514,40 @@ class DB:
     def set_banned(self, uid: int, banned: bool) -> None:
         with self._lock:
             self.conn.execute("UPDATE users SET banned=? WHERE id=?", (int(banned), uid))
+
+    def _ensure_admin_actions(self) -> None:
+        """Additive journal of admin actions. Never stores secrets or token values."""
+        with self._lock:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS admin_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    target TEXT,
+                    detail TEXT,
+                    created_at INTEGER NOT NULL
+                )"""
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_admin_actions_time ON admin_actions(created_at DESC, id DESC)"
+            )
+
+    def log_admin(self, admin_id: int, action: str, target: str = "", detail: str = "") -> None:
+        """Record an admin action. detail must not contain keys, tokens or secrets."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO admin_actions(admin_id,action,target,detail,created_at) VALUES(?,?,?,?,?)",
+                (admin_id, action[:64], (target or "")[:128], (detail or "")[:500], now()),
+            )
+
+    def admin_actions(self, limit: int = 20, offset: int = 0) -> list[sqlite3.Row]:
+        return self.all(
+            "SELECT * FROM admin_actions ORDER BY id DESC LIMIT ? OFFSET ?",
+            limit, offset,
+        )
+
+    def admin_actions_count(self) -> int:
+        return self.scalar("SELECT COUNT(*) FROM admin_actions") or 0
 
     def change_balance(self, uid: int, amount: int, kind: str, comment: str = "", *, allow_negative: bool = False) -> int:
         with self.tx() as c:

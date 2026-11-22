@@ -2,7 +2,7 @@
 import time
 
 import pytest
-from aiogram.methods import CopyMessage, SendMessage
+from aiogram.methods import AnswerCallbackQuery, CopyMessage, SendMessage
 
 from child.__main__ import build_dispatcher
 from child.core import ChildApp
@@ -143,6 +143,7 @@ async def test_starbot_bonus_tasks_admin(tmp_path, bot, session):
     assert "Пользователей: 2" in session.texts()[-1]
     await feed(cb_update(OWNER, "adm:bc"))
     await feed(msg_update(OWNER, "Всем привет"))
+    await feed(cb_update(OWNER, "adm:bcgo"))
     import asyncio
     for _ in range(50):
         if len(session.of(CopyMessage)) == 2:
@@ -159,3 +160,26 @@ async def test_vip_hides_footer(tmp_path, bot, session, template):
     dp = build_dispatcher(app)
     await dp.feed_update(bot, msg_update(A, "/start"))
     assert "Бот создан" not in session.of(SendMessage)[-1].text
+
+
+
+async def test_owner_user_list_and_ban(tmp_path, bot, session):
+    app, feed = make(tmp_path, "clicker", bot)
+    await feed(msg_update(A, "/start"))
+    await feed(msg_update(OWNER, "/start"))
+    await feed(msg_update(OWNER, "⚙️ Админка"))
+    await feed(cb_update(OWNER, "adm:users:0"))
+    assert "Пользователи" in session.texts()[-1]
+    await feed(cb_update(OWNER, f"adm:u:{A}"))
+    assert str(A) in session.texts()[-1]
+    await feed(cb_update(OWNER, f"adm:ban:{OWNER}"))
+    assert session.of(AnswerCallbackQuery)[-1].text == "Нельзя забанить владельца"
+    await feed(cb_update(OWNER, f"adm:ban:{A}"))
+    assert app.db.is_banned(A)
+    session.clear()
+    await feed(msg_update(A, "👆 Кликать"))
+    assert any("Доступ ограничен" in (m or "") for m in session.texts())
+    await feed(cb_update(A, "tap"))
+    assert app.db.user(A)["clicks"] == 0
+    await feed(cb_update(A, "adm:users:0"))
+    assert "Пользователи" not in "".join(session.texts())
