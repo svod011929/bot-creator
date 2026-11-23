@@ -52,7 +52,8 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
         "fin": [[btn("💰 Цены и тарифы", "a:prices")],
                    [btn("💳 LavePay", "a:lave:0")]],
         "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")],
-                   [btn("💡 Идеи пользователей", "a:ideas")]],
+                   [btn("💡 Идеи пользователей", "a:ideas")],
+                   [btn("🔄 Перезапустить все боты", "a:restartall")]],
         "settings": [[btn("🔒 Обязательная подписка", "a:set:gate")],
                      [btn("💡 Награда за идеи", "a:set:reward")],
                      [btn("📞 Контакты поддержки", "a:set:contacts")]],
@@ -1137,3 +1138,27 @@ async def set_contacts(cb: CallbackQuery, ctx: Ctx) -> None:
     )
     await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     await cb.answer()
+
+@router.callback_query(F.data == "a:restartall")
+async def restart_all_ask(cb: CallbackQuery, ctx: Ctx) -> None:
+    n = len(ctx.db.bots_to_run())
+    await cb.message.edit_text(
+        f"🔄 Перезапустить все работающие боты ({n})?\n"
+        "Они кратко отключатся и запустятся снова.",
+        reply_markup=ikb(
+            [btn("✅ Да, перезапустить", "a:restartall:yes")],
+            [btn("⬅️ Отмена", "a:g:tools")],
+        ),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "a:restartall:yes")
+async def restart_all_go(cb: CallbackQuery, ctx: Ctx) -> None:
+    await cb.answer("Перезапускаю…")
+    n = await ctx.sup.restart_all()
+    ctx.db.log_admin(cb.from_user.id, "restart_all", detail=f"n={n}")
+    await cb.message.edit_text(
+        f"🔄 Перезапущено ботов: {n}",
+        reply_markup=ikb([btn("⬅️ Назад", "a:g:tools")]),
+    )
