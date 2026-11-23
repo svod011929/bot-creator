@@ -14,7 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from child.core import ChildApp, GateMiddleware, build_admin_router, build_core_router, install_bot_commands
+from child.core import ChildApp, GateMiddleware, apply_bot_settings, build_admin_router, build_core_router, install_bot_commands
 from child.engagement import ObservationScope
 from child.payout_flow import build_payout_router
 from child.withdrawals import build_history_router
@@ -59,6 +59,7 @@ async def run(bot_dir: Path) -> int:
     app.username = me.username or app.username
     dp = build_dispatcher(app)
     await install_bot_commands(bot, app)
+    await apply_bot_settings(bot)
     logging.info("Бот @%s (шаблон %s) запущен", app.username, app.info.key)
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
