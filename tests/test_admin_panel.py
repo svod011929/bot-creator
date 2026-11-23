@@ -78,7 +78,8 @@ async def test_non_admin_and_removed_admin_get_nothing(env):  # noqa: F811
                 cb_update(OWNER, "a:bots:0"), cb_update(OWNER, "a:bot:1"), cb_update(OWNER, f"a:user:{OWNER}"),
                 cb_update(OWNER, "a:botfind"), cb_update(OWNER, "a:ulist:0:all"), cb_update(OWNER, "a:alog:0"),
                 cb_update(OWNER, "a:lave:0"), cb_update(OWNER, "a:bots:0:deleted"),
-                cb_update(OWNER, "a:bcb"), cb_update(OWNER, "a:bcbgo")):
+                cb_update(OWNER, "a:bcb"), cb_update(OWNER, "a:bcbgo"),
+                cb_update(OWNER, "a:restartall"), cb_update(OWNER, "a:restartall:yes")):
         await feed(upd)
     assert not any("Админ" in (t or "") or "Бот ID" in (t or "") for t in session.texts())
     await feed(msg_update(ADMIN, "/admin"))
@@ -368,6 +369,7 @@ async def test_admin_panel_has_submenus_with_all_buttons(env):  # noqa: F811
     inner = {b.callback_data for rows in _group_rows(ctx, ADMIN).values() for r in rows for b in r}
     needed = ("a:users", "a:bots", "a:botfind", "a:bc", "a:bcb", "a:news",
               "a:prices", "a:lave:0", "a:alog:0", "src:home", "a:ideas",
+              "a:restartall",
               "a:set:gate", "a:set:reward", "a:set:contacts")
     for need in needed:
         assert need in inner
@@ -396,3 +398,27 @@ async def test_admin_bot_lists_show_child_user_counts(env):  # noqa: F811
     labels = [t for t, _ in inline(session.of(SendMessage)[-1])]
     assert any(f"ID {ids[0]}" in t and "2 👤" in t for t in labels)
     assert "Боты владельца" in session.texts()[-1]
+
+
+async def test_restart_all_requires_confirm_and_logs(env):  # noqa: F811
+    ctx, feed, session = env
+    seed_bots(ctx, 3)
+    called = []
+
+    async def fake_restart_all():
+        called.append(True)
+        return 3
+
+    ctx.sup.restart_all = fake_restart_all
+    await feed(msg_update(ADMIN, "/admin"))
+    await feed(cb_update(ADMIN, "a:g:tools"))
+    await feed(cb_update(ADMIN, "a:restartall"))
+    assert "Перезапустить все работающие боты (3)" in session.texts()[-1]
+    assert not called
+    labels = [t for t, _ in inline(session.of(EditMessageText)[-1])]
+    assert any("Да, перезапустить" in t for t in labels)
+    await feed(cb_update(ADMIN, "a:restartall:yes"))
+    assert called == [True]
+    assert "Перезапущено ботов: 3" in session.texts()[-1]
+    row = ctx.db.one("SELECT action, detail FROM admin_actions WHERE action='restart_all'")
+    assert row["action"] == "restart_all" and row["detail"] == "n=3"

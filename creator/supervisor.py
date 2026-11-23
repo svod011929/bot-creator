@@ -182,6 +182,17 @@ class Supervisor:
             await self._terminate(bot_id)
             await self._start(bot_id, require_desired=require_desired)
 
+    async def restart_all(self) -> int:
+        """Restart every bot that should be running (desired=1, not deleted)."""
+        n = 0
+        for b in self.db.bots_to_run():
+            try:
+                await self.restart(b["id"])
+                n += 1
+            except Exception:  # noqa: BLE001
+                log.exception("cannot restart bot %s", b["id"])
+        return n
+
     async def start_all(self) -> int:
         if self.shared:
             n = 0

@@ -16,6 +16,8 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -37,6 +39,32 @@ from child.tgrass import TEXT as TG_TEXT
 from child.tgrass import TGrassGate
 
 log = logging.getLogger("child")
+
+USER_BOT_COMMANDS = [
+    BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="profile", description="Профиль"),
+    BotCommand(command="withdraw", description="Вывод"),
+]
+ADMIN_BOT_COMMAND = BotCommand(command="admin", description="Админка")
+
+
+async def install_bot_commands(bot: Bot, app: "ChildApp") -> None:
+    """Default menu for everyone; /admin only for the owner chat."""
+    try:
+        await bot.set_my_commands(list(USER_BOT_COMMANDS))
+    except Exception:  # noqa: BLE001
+        log.warning("Не удалось установить меню команд")
+        return
+    if not app.owner_id:
+        return
+    try:
+        await bot.set_my_commands(
+            [*USER_BOT_COMMANDS, ADMIN_BOT_COMMAND],
+            scope=BotCommandScopeChat(chat_id=app.owner_id),
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("Не удалось установить меню команд для владельца")
+
 
 BTN_PROFILE = "👤 Профиль"
 BTN_WITHDRAW = "💸 Вывод"
@@ -189,6 +217,8 @@ class GateMiddleware(BaseMiddleware):
             elif isinstance(event, Message):
                 await event.answer("Доступ ограничен владельцем бота.")
             return None
+        # /start registers the user and shows sponsors itself.
+        # Every other message and button still goes through the sponsor check below.
         if isinstance(event, Message) and (event.text or "").startswith("/start"):
             return await handler(event, data)
         if isinstance(event, CallbackQuery) and event.data in ("chk_sub", TG_CHECK_CB, PF_CHECK_CB):
@@ -347,6 +377,7 @@ def build_core_router(app: ChildApp) -> Router:
         result = await app.gate_result(cb.bot, u.id)
         await enter_after_check(cb.message, u.id, result)
 
+    @r.message(Command("profile"))
     @r.message(F.text == BTN_PROFILE)
     async def profile(message: Message) -> None:
         if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
@@ -354,6 +385,7 @@ def build_core_router(app: ChildApp) -> Router:
         await send_profile(message, app, message.from_user.id)
 
     # ---------- вывод ----------
+    @r.message(Command("withdraw"))
     @r.message(F.text == BTN_WITHDRAW)
     async def withdraw(message: Message, state: FSMContext) -> None:
         if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
