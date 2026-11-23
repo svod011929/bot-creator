@@ -20,7 +20,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 
 from child.__main__ import EXIT_BAD_TOKEN, build_dispatcher
-from child.core import ChildApp, install_bot_commands
+from child.core import ChildApp, apply_bot_settings, install_bot_commands
 
 log = logging.getLogger("worker")
 
@@ -91,6 +91,7 @@ class BotHost:
             app.username = me.username or app.username
             dp = build_dispatcher(app)
             await install_bot_commands(bot, app)
+            await apply_bot_settings(bot)
             _append_bot_log(Path(app.dir), f"Run polling for bot @{app.username}")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         except TelegramUnauthorizedError:

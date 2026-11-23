@@ -4,7 +4,15 @@ from types import SimpleNamespace
 from aiogram.filters import Command
 from aiogram.types import BotCommand, BotCommandScopeChat
 
-from child.core import ADMIN_BOT_COMMAND, USER_BOT_COMMANDS, build_core_router, install_bot_commands
+from child.core import (
+    ADMIN_BOT_COMMAND,
+    DEFAULT_BOT_SETTINGS,
+    USER_BOT_COMMANDS,
+    SetMySettings,
+    apply_bot_settings,
+    build_core_router,
+    install_bot_commands,
+)
 
 
 class _FakeBot:
@@ -77,3 +85,35 @@ def test_core_router_accepts_profile_and_withdraw_commands():
                 commands.update(callback.commands)
     assert "profile" in commands
     assert "withdraw" in commands
+
+
+
+class _CallBot:
+    def __init__(self) -> None:
+        self.methods: list = []
+
+    async def __call__(self, method):
+        self.methods.append(method)
+        return True
+
+
+async def test_apply_bot_settings_sends_conservative_defaults():
+    bot = _CallBot()
+    await apply_bot_settings(bot)
+    assert len(bot.methods) == 1
+    method = bot.methods[0]
+    assert isinstance(method, SetMySettings)
+    assert method.__api_method__ == "setMySettings"
+    payload = method.model_dump(exclude_none=True)
+    assert payload == DEFAULT_BOT_SETTINGS
+    assert payload["can_join_groups"] is True
+    assert payload["can_read_all_group_messages"] is False
+    assert payload["callback_query_mode"] == "default"
+
+
+async def test_apply_bot_settings_survives_api_error():
+    class Boom(_CallBot):
+        async def __call__(self, method):
+            raise RuntimeError("https://api.telegram.org/botSECRET/setMySettings")
+
+    await apply_bot_settings(Boom())

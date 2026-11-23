@@ -15,6 +15,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.methods.base import TelegramMethod
 from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
@@ -46,6 +47,39 @@ USER_BOT_COMMANDS = [
     BotCommand(command="withdraw", description="Вывод"),
 ]
 ADMIN_BOT_COMMAND = BotCommand(command="admin", description="Админка")
+
+# Conservative defaults via Bot API 10.5 setMySettings. Privacy mode stays on.
+DEFAULT_BOT_SETTINGS = {
+    "can_join_groups": True,
+    "can_read_all_group_messages": False,
+    "can_communicate_with_bots": False,
+    "has_topics_enabled": False,
+    "has_topic_sidebar": False,
+    "callback_query_mode": "default",
+}
+
+
+class SetMySettings(TelegramMethod[bool]):
+    """Change bot settings that used to live only in BotFather (Bot API 10.5)."""
+
+    __returning__ = bool
+    __api_method__ = "setMySettings"
+
+    can_join_groups: bool | None = None
+    can_read_all_group_messages: bool | None = None
+    can_communicate_with_bots: bool | None = None
+    has_topics_enabled: bool | None = None
+    has_topic_sidebar: bool | None = None
+    callback_query_mode: str | None = None
+
+
+async def apply_bot_settings(bot: Bot) -> None:
+    """Apply DEFAULT_BOT_SETTINGS. Ignore servers that do not support the method yet."""
+    try:
+        await bot(SetMySettings(**DEFAULT_BOT_SETTINGS))
+    except Exception:  # noqa: BLE001
+        # Do not log the exception: HTTP clients may include the bot token in the URL.
+        log.debug("setMySettings недоступен")
 
 
 async def install_bot_commands(bot: Bot, app: "ChildApp") -> None:
