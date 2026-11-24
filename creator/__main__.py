@@ -80,6 +80,7 @@ async def run() -> None:
     tasks: list[asyncio.Task] = []
     webhook_runner = None
     unsub_runner = None
+    mgram_proxy_runner = None
     if cfg.lavepay_enabled:
         lave_client = LavePayClient(cfg.lavepay_api_key, cfg.lavepay_base_url)
         ctx.lave = LavePayService(ctx, lave_client, notify=notify, webhook_secret=cfg.lavepay_webhook_secret)
@@ -108,6 +109,8 @@ async def run() -> None:
            notify_owner_strict=notify_strict)
     if cfg.webhook_listen_port:
         unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
+    from creator.mgram_tasks import start_proxy, stop_proxy
+    mgram_proxy_runner = await start_proxy(cfg, db)
     from creator.integrations import ensure_services, wait_and_sync
     ensure_services(ctx)
     for network in ("tgrass", "piarflow"):
@@ -128,6 +131,7 @@ async def run() -> None:
             await webhook_runner.cleanup()
         if unsub_runner:
             await unsub_runner.cleanup()
+        await stop_proxy(mgram_proxy_runner, cfg)
         payouts = getattr(ctx, "payouts", None) or getattr(getattr(ctx, "lave", None), "payouts", None)
         if payouts is not None:
             payouts.close()

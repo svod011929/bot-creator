@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import math
 
 from aiogram import F, Router
@@ -12,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.db import fmt, now
+from child.mgram_proxy import check_completion, fetch_pending
 from child.templates import Setting, TemplateInfo
 from child.withdrawals import is_owner
 
@@ -22,7 +24,8 @@ INFO = TemplateInfo(
     price_key="PRICE_MICROTASKS",
     description="Владелец создаёт задания с разными типами доказательств. "
                 "Пользователи выполняют их и получают награду после ручной или автоматической проверки. "
-                "Есть очередь заявок, комментарии при отклонении и лимит активных заявок.",
+                "Есть очередь заявок, комментарии при отклонении и лимит активных заявок. "
+                "Опционально можно включить задания MGRAM (по умолчанию выключено).",
     settings=[
         Setting("welcome", "Приветствие", "Выполняй задания и получай награду после проверки. "
                 "Владелец рассматривает заявки вручную или настраивает авто-одобрение."),
@@ -34,6 +37,7 @@ INFO = TemplateInfo(
         Setting("channel_url", "Ссылка на канал (для приватных)", "-"),
         Setting("max_pending", "Макс. активных заявок", 3, "int"),
         Setting("auto_reject_hours", "Авто-отклонение через (часов)", 48, "int"),
+        Setting("mgram_tasks", "Задания MGRAM (0 — выкл, 1 — вкл)", 0, "int"),
     ],
     version=1,
     capabilities=("microtasks", "manual_review", "auto_approve"),
@@ -97,6 +101,17 @@ def _can_do_task(app, uid: int, task) -> tuple[bool, str]:
 _PROOF_LABELS = {"text": "текст", "photo": "фото", "link": "ссылка", "button": "кнопка"}
 
 
+def _mgram_enabled(app) -> bool:
+    try:
+        return int(app.s.get("mgram_tasks") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _mgram_bot_id(app) -> int:
+    return int(app.cfg.get("bot_id") or 0)
+
+
 def _proof_types_label(types: list[str]) -> str:
     return ", ".join(_PROOF_LABELS.get(t, t) for t in types) or "—"
 
@@ -129,9 +144,6 @@ def build_router(app) -> Router:
             ok, _ = _can_do_task(app, uid, t)
             if ok:
                 available.append(t)
-        if not available:
-            await message.answer("Сейчас нет доступных заданий (или достигнут лимит заявок).")
-            return
         lines = ["📋 <b>Доступные задания</b>\n"]
         kb = []
         for t in available:
@@ -141,7 +153,29 @@ def build_router(app) -> Router:
                 f" ({_proof_types_label(types)})"
             )
             kb.append([InlineKeyboardButton(text=f"✅ {t['title'][:28]}", callback_data=f"mt:do:{t['id']}")])
-        await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        if _mgram_enabled(app):
+            done = {r["task_id"] for r in app.db.all(
+                "SELECT task_id FROM micro_mgram_done WHERE user_id=?", uid
+            )}
+            for task in await fetch_pending(app.cfg, _mgram_bot_id(app), uid):
+                tid = task.get("id")
+                if not tid or tid in done:
+                    continue
+                reward = float(task.get("reward") or 0)
+                btn_text = task.get("button_text") or task.get("title") or "Выполнить"
+                lines.append(
+                    f"• 📡 {html.escape(str(btn_text))} — {fmt(reward)} {app.s['currency']} (MGRAM)"
+                )
+                kb.append([InlineKeyboardButton(
+                    text=f"📡 {str(btn_text)[:24]}",
+                    callback_data=f"mt:mgram:{tid}",
+                )])
+        if not available and not kb:
+            await message.answer("Сейчас нет доступных заданий (или достигнут лимит заявок).")
+            return
+        if not lines[1:]:
+            lines.append("Нет доступных заданий.")
+        await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb) if kb else None)
 
     @r.callback_query(F.data.startswith("mt:do:"))
     async def start_do(cb: CallbackQuery, state: FSMContext) -> None:
@@ -207,6 +241,73 @@ def build_router(app) -> Router:
             except Exception:
                 pass
         await state.clear()
+
+    @r.callback_query(F.data.startswith("mt:mgram:"))
+    async def mgram_show(cb: CallbackQuery) -> None:
+        if not _mgram_enabled(app):
+            await cb.answer("Задания MGRAM выключены", show_alert=True)
+            return
+        try:
+            tid = int(cb.data.split(":")[-1])
+        except ValueError:
+            await cb.answer("Неверная кнопка", show_alert=True)
+            return
+        tasks = await fetch_pending(app.cfg, _mgram_bot_id(app), cb.from_user.id)
+        task = next((item for item in tasks if item.get("id") == tid), None)
+        if not task:
+            await cb.answer("Задание недоступно или уже выполнено", show_alert=True)
+            return
+        reward = float(task.get("reward") or 0)
+        link = str(task.get("link") or "")
+        text = (
+            f"📡 <b>Задание MGRAM</b>\n\n"
+            f"{html.escape(str(task.get('button_text') or task.get('title') or 'Выполнить'))}\n"
+            f"Награда: {fmt(reward)} {app.s['currency']}\n\n"
+            "Перейдите по ссылке, выполните действие, затем нажмите «Проверить»."
+        )
+        rows = []
+        if link:
+            rows.append([InlineKeyboardButton(text="🔗 Перейти", url=link)])
+        rows.append([InlineKeyboardButton(text="✅ Проверить", callback_data=f"mt:mgramcheck:{tid}")])
+        app.db.remember_mgram_shown(cb.from_user.id, tid, reward)
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                                disable_web_page_preview=True)
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("mt:mgramcheck:"))
+    async def mgram_check(cb: CallbackQuery) -> None:
+        if not _mgram_enabled(app):
+            await cb.answer("Задания MGRAM выключены", show_alert=True)
+            return
+        try:
+            tid = int(cb.data.split(":")[-1])
+        except ValueError:
+            await cb.answer("Неверная кнопка", show_alert=True)
+            return
+        uid = cb.from_user.id
+        already = app.db.one("SELECT reward FROM micro_mgram_done WHERE user_id=? AND task_id=?", uid, tid)
+        if already:
+            await cb.answer("Уже засчитано", show_alert=True)
+            return
+        result = await check_completion(app.cfg, _mgram_bot_id(app), uid, tid)
+        if not result.confirmed:
+            await cb.answer("Задание ещё не выполнено. Попробуйте снова после выполнения.", show_alert=True)
+            return
+        shown = app.db.one("SELECT reward FROM micro_mgram_shown WHERE user_id=? AND task_id=?", uid, tid)
+        reward = result.reward if result.reward is not None else (float(shown["reward"]) if shown else None)
+        if reward is None:
+            await cb.answer("Не удалось определить награду. Попробуйте позже.", show_alert=True)
+            return
+        credited = app.db.credit_mgram_task(uid, tid, reward)
+        if credited is None:
+            await cb.answer("Уже засчитано", show_alert=True)
+            return
+        logging.getLogger("child.mgram").info(
+            "mgram task credited bot=%s user=%s task=%s reward=%s",
+            _mgram_bot_id(app), uid, tid, credited,
+        )
+        await cb.answer(f"Задание выполнено! +{fmt(credited)}", show_alert=True)
+        await cb.message.answer(f"Задание MGRAM засчитано. Начислено {fmt(credited)} {app.s['currency']}.")
 
     @r.message(F.text == BTN_MY)
     async def my_submissions(message: Message) -> None:

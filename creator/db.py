@@ -1,6 +1,7 @@
 """SQLite-хранилище конструктора."""
 from __future__ import annotations
 
+import secrets
 import sqlite3
 import threading
 import time
@@ -59,6 +60,12 @@ CREATE TABLE IF NOT EXISTS mgram_bots (
     api_key_shown INTEGER NOT NULL DEFAULT 0,
     registered_at INTEGER NOT NULL,
     last_sync_at INTEGER,
+    FOREIGN KEY (bot_id) REFERENCES bots(id)
+);
+CREATE TABLE IF NOT EXISTS mgram_task_proxy (
+    bot_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
     FOREIGN KEY (bot_id) REFERENCES bots(id)
 );
 CREATE TABLE IF NOT EXISTS ideas (
@@ -266,6 +273,7 @@ class DB:
         self._ensure_owner_lavepay_schema()
         self._ensure_admin_actions()
         self._ensure_bot_broadcasts()
+        self._ensure_mgram_task_proxy()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -1041,6 +1049,46 @@ class DB:
     def mgram_get(self, bot_id: int) -> dict | None:
         row = self.one("SELECT * FROM mgram_bots WHERE bot_id=?", bot_id)
         return dict(row) if row else None
+
+    def _ensure_mgram_task_proxy(self) -> None:
+        """Per-bot tokens for the local MGRAM tasks proxy. Additive; not a provider key."""
+        with self._lock:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS mgram_task_proxy (
+                    bot_id INTEGER PRIMARY KEY,
+                    token TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (bot_id) REFERENCES bots(id)
+                )"""
+            )
+
+    def mgram_proxy_token(self, bot_id: int) -> str:
+        """Return the existing local proxy token, or create one. Never stores the hub key."""
+        row = self.one("SELECT token FROM mgram_task_proxy WHERE bot_id=?", bot_id)
+        if row and row["token"]:
+            return row["token"]
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            try:
+                self.conn.execute(
+                    "INSERT INTO mgram_task_proxy(bot_id, token, created_at) VALUES(?,?,?)",
+                    (bot_id, token, now()),
+                )
+            except sqlite3.IntegrityError:
+                row = self.conn.execute(
+                    "SELECT token FROM mgram_task_proxy WHERE bot_id=?", (bot_id,)
+                ).fetchone()
+                if row and row["token"]:
+                    return row["token"]
+                raise
+        return token
+
+    def mgram_proxy_bot(self, token: str) -> int | None:
+        token = (token or "").strip()
+        if not token:
+            return None
+        row = self.one("SELECT bot_id FROM mgram_task_proxy WHERE token=?", token)
+        return int(row["bot_id"]) if row else None
 
     def idea_add(self, user_id: int, text: str) -> int:
         cur = self.conn.execute(

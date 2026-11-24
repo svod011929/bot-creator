@@ -94,7 +94,7 @@ async def test_child_env_has_no_main_token(env, monkeypatch, tmp_path):
 async def test_child_env_excludes_all_parent_secrets(env, monkeypatch, tmp_path):
     cfg, db, bot_id = env
     names = ("BOT_TOKEN", "ADMIN_IDS", "LAVEPAY_API_KEY", "LAVEPAY_WEBHOOK_SECRET", "TGRASS_FACTORY_TOKEN",
-             "PIARFLOW_TOKEN", "CUSTOM_PARENT_SECRET")
+             "PIARFLOW_TOKEN", "MGRAM_PARTNER_API_KEY", "MGRAM_HUB_API_KEY", "CUSTOM_PARENT_SECRET")
     for name in names:
         monkeypatch.setenv(name, "synthetic-parent-value")
     out = tmp_path / "env-presence.txt"
@@ -182,6 +182,8 @@ async def test_child_env_forwards_runtime_proxy_and_excludes_secrets(env, monkey
         "TGRASS_HUB_API_KEY": "synthetic-tgrass-hub",
         "PIARFLOW_TOKEN": "synthetic-piarflow",
         "PIARFLOW_HUB_API_KEY": "synthetic-piarflow-hub",
+        "MGRAM_PARTNER_API_KEY": "synthetic-mgram-partner",
+        "MGRAM_HUB_API_KEY": "synthetic-mgram-hub",
         "CUSTOM_PARENT_SECRET": "synthetic-parent-value",
     }
     for name, value in {**forwarded, **secrets}.items():

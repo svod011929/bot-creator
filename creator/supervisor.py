@@ -82,6 +82,7 @@ class Supervisor:
         os.chmod(d, 0o700)
         tgrass_key = self.db.tgrass_key_for(bot_id)
         piarflow_key = self.db.pf_key_for(bot_id)
+        from creator.mgram_tasks import sock_path
         from creator.owner_payouts import child_flags
         payload = {
             "bot_id": b["id"],
@@ -96,6 +97,10 @@ class Supervisor:
             "vip": bool(b["vip"]),
             "creator_username": self.creator_username,
         }
+        if b["template"] == "microtasks":
+            # Local proxy only: path + per-bot token. The hub/partner keys stay in the constructor.
+            payload["mgram_proxy"] = str(sock_path(self.cfg))
+            payload["mgram_proxy_token"] = self.db.mgram_proxy_token(bot_id)
         payload.update(child_flags(self.cfg, self.db, bot_id))
         write_config(d, payload)
         return d

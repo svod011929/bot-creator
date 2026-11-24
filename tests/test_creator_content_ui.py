@@ -57,7 +57,7 @@ async def fill(w, session):
 async def test_create_preview_save_edit_publish_and_copy_from_creator(runtime, session):
     w = runtime
     await w.feed(msg_update(OWNER, "/start"))
-    assert "📚 Контент ботов" in [b.text for row in session.of(SendMessage)[-1].reply_markup.keyboard for b in row]
+    assert "📚 Контент ботов" not in [b.text for row in session.of(SendMessage)[-1].reply_markup.keyboard for b in row]
     await w.feed(msg_update(OWNER, "📚 Контент ботов"))
     assert w.cb("home") in callbacks(last_screen(session))
     await w.feed(cb_update(OWNER, w.cb("home")))
