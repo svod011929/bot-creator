@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sqlite3
 import threading
 import time
@@ -10,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from child.money import MONEY_COLUMNS, as_minor, to_minor
+from child.money import fmt as format_minor
 from child.payouts import idempotency_key as payout_idempotency_key
 
 SCHEMA = """
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT,
     referrer_id INTEGER,
     ref_rewarded INTEGER NOT NULL DEFAULT 0,
-    balance REAL NOT NULL DEFAULT 0,
+    balance INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     clicks INTEGER NOT NULL DEFAULT 0,
     last_daily INTEGER NOT NULL DEFAULT 0,
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS withdrawals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
-    amount REAL NOT NULL,
+    amount INTEGER NOT NULL,
     details TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at INTEGER NOT NULL,
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     channel TEXT,
-    reward REAL NOT NULL,
+    reward INTEGER NOT NULL,
     active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS task_done (
@@ -56,8 +57,9 @@ def now() -> int:
     return int(time.time())
 
 
-def fmt(x: float) -> str:
-    return f"{x:.2f}".rstrip("0").rstrip(".") if x != int(x) else str(int(x))
+def fmt(x: object) -> str:
+    """Display a stored minor-unit amount in major units."""
+    return format_minor(x)
 
 
 class ChildDB:
@@ -75,6 +77,8 @@ class ChildDB:
     def __init__(self, path: Path | str):
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
+        self.lock = threading.RLock()
+        self._savepoint_counter = 0
         try:
             deadline = time.monotonic() + 5
             while True:
@@ -90,12 +94,10 @@ class ChildDB:
             self._ensure_banned_column()
             self._ensure_owner_actions()
             self._ensure_microtasks()
+            self.money_migration = self.migrate_money_to_minor()
         except BaseException:
             self.conn.close()
             raise
-        self.lock = threading.RLock()
-        self._savepoint_counter = 0
-
     def _migrate_withdrawals(self) -> None:
         # Recheck schema after acquiring SQLite's writer lock (also protects concurrent openers).
         self.conn.execute("BEGIN IMMEDIATE")
@@ -192,23 +194,35 @@ class ChildDB:
     def user(self, uid: int) -> sqlite3.Row | None:
         return self.one("SELECT * FROM users WHERE id=?", uid)
 
-    def add_balance(self, uid: int, amount: float) -> float:
-        if not math.isfinite(amount):
-            raise ValueError("Non-finite amount")
+    def add_balance(self, uid: int, amount: int, *, clicks: int = 0) -> int:
+        amount = as_minor(amount)
+        if clicks < 0:
+            raise ValueError("Invalid clicks")
         with self.lock:
-            self.exec("UPDATE users SET balance=balance+? WHERE id=?", amount, uid)
-            return self.scalar("SELECT balance FROM users WHERE id=?", uid) or 0.0
+            if clicks:
+                self.exec(
+                    "UPDATE users SET balance=balance+?,clicks=clicks+? WHERE id=?",
+                    amount, clicks, uid,
+                )
+            else:
+                self.exec("UPDATE users SET balance=balance+? WHERE id=?", amount, uid)
+            return int(self.scalar("SELECT balance FROM users WHERE id=?", uid) or 0)
 
-    def try_spend(self, uid: int, amount: float) -> bool:
-        if not math.isfinite(amount) or amount < 0:
+    def try_spend(self, uid: int, amount: int) -> bool:
+        try:
+            amount = as_minor(amount)
+        except ValueError:
+            return False
+        if amount < 0:
             return False
         with self.lock:
             cur = self.exec("UPDATE users SET balance=balance-? WHERE id=? AND balance>=?", amount, uid, amount)
             return cur.rowcount == 1
 
-    def reward_referrer_once(self, uid: int, reward: float) -> int | None:
+    def reward_referrer_once(self, uid: int, reward: int) -> int | None:
         """Начисляет пригласившему награду за uid (один раз). Возвращает id пригласившего."""
-        if not math.isfinite(reward) or reward < 0:
+        reward = as_minor(reward)
+        if reward < 0:
             raise ValueError("Invalid reward")
         with self.tx():
             u = self.user(uid)
@@ -219,9 +233,10 @@ class ChildDB:
                 self.add_balance(u["referrer_id"], reward)
             return u["referrer_id"]
 
-    def remember_mgram_shown(self, uid: int, task_id: int, reward: float) -> None:
+    def remember_mgram_shown(self, uid: int, task_id: int, reward: int) -> None:
         """Store the reward shown to the user; overwritten if the same task is shown again."""
-        if not math.isfinite(reward) or reward < 0:
+        reward = as_minor(reward)
+        if reward < 0:
             raise ValueError("Invalid reward")
         with self.lock:
             self.exec(
@@ -230,9 +245,10 @@ class ChildDB:
                 uid, task_id, reward, now(),
             )
 
-    def credit_mgram_task(self, uid: int, task_id: int, reward: float) -> float | None:
+    def credit_mgram_task(self, uid: int, task_id: int, reward: int) -> int | None:
         """Atomically credit a confirmed MGRAM task once. Returns the credited amount, or None if already done."""
-        if not math.isfinite(reward) or reward < 0:
+        reward = as_minor(reward)
+        if reward < 0:
             raise ValueError("Invalid reward")
         with self.tx():
             if not self.user(uid):
@@ -248,7 +264,7 @@ class ChildDB:
                 self.add_balance(uid, reward)
             return reward
 
-    def approve_micro_submission(self, sid: int) -> float | None:
+    def approve_micro_submission(self, sid: int) -> int | None:
         """Approve a pending microtask submission once and credit the reward.
 
         Returns the credited amount (may be 0), or None if the submission was
@@ -263,10 +279,10 @@ class ChildDB:
             if not sub or not self.user(sub["user_id"]):
                 return None
             try:
-                reward = float(sub["reward"])
-            except (TypeError, ValueError):
+                reward = as_minor(sub["reward"])
+            except ValueError:
                 return None
-            if not math.isfinite(reward) or reward < 0:
+            if reward < 0:
                 return None
             cur = self.exec(
                 "UPDATE micro_submissions SET status='approved', decided_at=? "
@@ -289,14 +305,36 @@ class ChildDB:
             )
             return cur.rowcount == 1
 
-    def complete_task(self, uid: int, tid: int, *, expected: tuple) -> float | None:
+    def reject_stale_micro_submissions(self, hours: int, *, now_ts: int | None = None) -> int:
+        """Reject pending microtask submissions older than the configured timeout.
+
+        Same rule as the owner queue: comment is «Авто-отклонение по сроку».
+        Returns the number of rows changed. hours <= 0 disables the job.
+        """
+        if type(hours) is not int or hours <= 0:
+            return 0
+        ts = now() if now_ts is None else int(now_ts)
+        cutoff = ts - hours * 3600
+        with self.tx():
+            cur = self.exec(
+                "UPDATE micro_submissions SET status='rejected', comment='Авто-отклонение по сроку', decided_at=? "
+                "WHERE status='pending' AND created_at < ?",
+                ts, cutoff,
+            )
+            return cur.rowcount or 0
+
+
+    def complete_task(self, uid: int, tid: int, *, expected: tuple) -> int | None:
         """Credit once, only if the checked task is still active and unchanged."""
         with self.tx():
             task = self.one("SELECT * FROM tasks WHERE id=? AND active=1", tid)
             if not task or not self.user(uid) or (task["url"], task["channel"], task["reward"]) != expected:
                 return None
-            reward = task["reward"]
-            if not math.isfinite(reward) or reward <= 0:
+            try:
+                reward = as_minor(task["reward"])
+            except ValueError:
+                return None
+            if reward <= 0:
                 return None
             cur = self.exec(
                 "INSERT INTO task_done(user_id, task_id) VALUES(?,?) ON CONFLICT(user_id,task_id) DO NOTHING", uid, tid
@@ -308,6 +346,10 @@ class ChildDB:
 
     def try_upgrade(self, uid: int, *, level: int, cost: int, max_level: int) -> bool:
         """A single conditional statement changes both balance and level."""
+        try:
+            cost = as_minor(cost)
+        except ValueError:
+            return False
         if cost < 0:
             return False
         with self.lock:
@@ -346,7 +388,7 @@ class ChildDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
                     description TEXT,
-                    reward REAL NOT NULL,
+                    reward INTEGER NOT NULL,
                     proof_types TEXT NOT NULL,
                     approval_mode TEXT NOT NULL,
                     repeat_mode TEXT NOT NULL,
@@ -373,7 +415,7 @@ class ChildDB:
                 CREATE TABLE IF NOT EXISTS micro_mgram_shown (
                     user_id INTEGER NOT NULL,
                     task_id INTEGER NOT NULL,
-                    reward REAL NOT NULL,
+                    reward INTEGER NOT NULL,
                     shown_at INTEGER NOT NULL,
                     PRIMARY KEY (user_id, task_id)
                 )
@@ -382,7 +424,7 @@ class ChildDB:
                 CREATE TABLE IF NOT EXISTS micro_mgram_done (
                     user_id INTEGER NOT NULL,
                     task_id INTEGER NOT NULL,
-                    reward REAL NOT NULL,
+                    reward INTEGER NOT NULL,
                     created_at INTEGER NOT NULL,
                     PRIMARY KEY (user_id, task_id)
                 )
@@ -457,9 +499,13 @@ class ChildDB:
         return self.scalar("SELECT COUNT(*) FROM users") or 0
 
 
-    def create_withdrawal(self, uid: int, amount: float, details: str, *, currency: str,
+    def create_withdrawal(self, uid: int, amount: int, details: str, *, currency: str,
                           method: str | None = None, payout: dict | None = None) -> int | None:
-        if not math.isfinite(amount) or amount <= 0:
+        try:
+            amount = as_minor(amount)
+        except ValueError:
+            return None
+        if amount <= 0:
             return None
         with self.tx():
             if not self.try_spend(uid, amount):
@@ -721,3 +767,116 @@ class ChildDB:
             "pending": self.scalar("SELECT COUNT(*) FROM withdrawals WHERE status='pending'") or 0,
             "paid": self.scalar("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='paid'") or 0,
         }
+
+    def _ensure_meta(self) -> None:
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS child_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+
+    def _meta(self, key: str) -> str | None:
+        row = self.one("SELECT value FROM child_meta WHERE key=?", key)
+        return None if row is None else str(row["value"])
+
+    def _set_meta(self, key: str, value: str) -> None:
+        self.exec(
+            "INSERT INTO child_meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            key, value,
+        )
+
+    def money_unit(self) -> str:
+        self._ensure_meta()
+        return self._meta("money_unit") or "major"
+
+    def money_sums(self) -> dict[str, float]:
+        """Sum stored money columns. Unit is whatever is currently in the rows."""
+        tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        out: dict[str, float] = {}
+        for table, column in MONEY_COLUMNS:
+            key = f"{table}.{column}"
+            if table not in tables:
+                out[key] = 0.0
+                continue
+            quoted_table = '"' + table.replace('"', '""') + '"'
+            quoted_column = '"' + column.replace('"', '""') + '"'
+            value = self.scalar(f"SELECT COALESCE(SUM({quoted_column}),0) FROM {quoted_table}")
+            out[key] = float(value or 0)
+        return out
+
+    def migrate_money_to_minor(self) -> dict:
+        """Idempotent conversion of stored money to integer minor units.
+
+        Returns a report with before/after sums and per-row rounding residuals.
+        New empty databases are marked minor without rewriting rows.
+        """
+        with self.tx():
+            self._ensure_meta()
+            if self._meta("money_unit") == "minor":
+                sums = self.money_sums()
+                return {
+                    "converted": False,
+                    "already": True,
+                    "unit": "minor",
+                    "sums": sums,
+                    "rounded": [],
+                }
+            tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            before = self.money_sums()
+            rounded: list[dict] = []
+            expected: dict[str, int] = {}
+            for table, column in MONEY_COLUMNS:
+                key = f"{table}.{column}"
+                if table not in tables:
+                    expected[key] = 0
+                    continue
+                quoted_table = '"' + table.replace('"', '""') + '"'
+                quoted_column = '"' + column.replace('"', '""') + '"'
+                total = 0
+                rows = self.all(f"SELECT rowid AS rid, {quoted_column} AS amount FROM {quoted_table}")
+                for row in rows:
+                    old = row["amount"]
+                    if old is None:
+                        continue
+                    new = to_minor(old)
+                    residual = float(old) * 100 - new
+                    if abs(residual) > 1e-9:
+                        rounded.append({"table": table, "column": column, "rowid": row["rid"],
+                                        "from": float(old), "to": new, "residual": residual})
+                    self.exec(
+                        f"UPDATE {quoted_table} SET {quoted_column}=? WHERE rowid=?",
+                        new, row["rid"],
+                    )
+                    total += new
+                expected[key] = total
+            self._set_meta("money_unit", "minor")
+            after = self.money_sums()
+            mismatches = {key: {"expected": expected[key], "after": after[key]}
+                          for key in expected if after.get(key) != expected[key]}
+            if mismatches:
+                raise RuntimeError("money migration sums did not match")
+            return {
+                "converted": True,
+                "already": False,
+                "unit": "minor",
+                "before": before,
+                "after": after,
+                "expected": expected,
+                "rounded": rounded,
+                "ok": True,
+            }
+
+    def revert_money_to_major(self) -> dict:
+        """Reverse migrate_money_to_minor. Only used if a deployment verify fails."""
+        with self.tx():
+            self._ensure_meta()
+            if self._meta("money_unit") != "minor":
+                return {"reverted": False, "unit": self._meta("money_unit") or "major"}
+            tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table, column in MONEY_COLUMNS:
+                if table not in tables:
+                    continue
+                quoted_table = '"' + table.replace('"', '""') + '"'
+                quoted_column = '"' + column.replace('"', '""') + '"'
+                self.exec(f"UPDATE {quoted_table} SET {quoted_column}={quoted_column}/100.0")
+            self._set_meta("money_unit", "major")
+            return {"reverted": True, "unit": "major", "sums": self.money_sums()}
+

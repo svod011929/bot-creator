@@ -61,7 +61,7 @@ def test_hosting_charge(db):
     b2 = db.materialize_draft(db.create_draft(1, "refbot", "1:b", "b", "B"), 2)
     db.update_bot(b1, next_charge_at=now() - 1)
     db.update_bot(b2, next_charge_at=now() - 1)
-    res = {b["id"]: ok for b, ok in db.charge_due_bots(3)}
+    res = {row.bot["id"]: row.ok for row in db.charge_due_bots(3)}
     assert res == {b1: True, b2: False}
     assert db.bot(b1)["hosting_balance"] == 0 and db.bot(b1)["next_charge_at"] > now()
     assert db.bot(b2)["desired"] == 0 and db.bot(b2)["status"] == "stopped"
@@ -183,3 +183,66 @@ def test_idea_vote_once_and_missing_idea_does_not_stick(db):
     assert db.idea_vote(999, 1) is False
     assert db.one("SELECT 1 FROM idea_votes WHERE idea_id=999") is None
     assert db.idea_get(iid)["votes"] == 2
+
+
+
+def test_hosting_charges_all_missed_days_once(db):
+    db.upsert_user(1, None, "A")
+    bot = db.materialize_draft(db.create_draft(1, "clicker", "1:a", "a", "A"), 1000)
+    start = now() - 3 * 86400
+    db.update_bot(bot, next_charge_at=start, desired=1)
+    rows = db.charge_due_bots(100, ts=start + 3 * 86400)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.ok is True and row.days == 4 and row.amount == 400 and row.left == 600
+    stored = db.bot(bot)
+    assert stored["hosting_balance"] == 600
+    assert stored["next_charge_at"] == start + 4 * 86400
+    assert db.charge_due_bots(100, ts=start + 3 * 86400) == []  # already charged those days
+    # A later tick at the exact next due second charges the next day only.
+    later = db.charge_due_bots(100, ts=stored["next_charge_at"])
+    assert later[0].days == 1 and later[0].amount == 100
+    assert db.bot(bot)["hosting_balance"] == 500
+    assert db.bot(bot)["next_charge_at"] == start + 5 * 86400
+
+
+def test_hosting_partial_catch_up_stops_when_balance_runs_out(db):
+    db.upsert_user(1, None, "A")
+    bot = db.materialize_draft(db.create_draft(1, "clicker", "1:a", "a", "A"), 250)
+    start = now() - 5 * 86400
+    db.update_bot(bot, next_charge_at=start, desired=1, status="running")
+    rows = db.charge_due_bots(100, ts=start + 5 * 86400)
+    row = rows[0]
+    assert row.ok is False and row.days == 2 and row.amount == 200 and row.left == 50
+    stored = db.bot(bot)
+    assert stored["hosting_balance"] == 50
+    assert stored["next_charge_at"] == start + 2 * 86400
+    assert stored["desired"] == 0 and stored["status"] == "stopped"
+    # After a top-up and restart, only the remaining unpaid days are due.
+    db.update_bot(bot, hosting_balance=1000, desired=1, status="running")
+    again = db.charge_due_bots(100, ts=start + 5 * 86400)
+    assert again[0].ok is True and again[0].days == 4 and again[0].amount == 400
+    assert db.bot(bot)["next_charge_at"] == start + 6 * 86400
+
+
+def test_hosting_catch_up_is_capped(db):
+    db.upsert_user(1, None, "A")
+    bot = db.materialize_draft(db.create_draft(1, "clicker", "1:a", "a", "A"), 100_000)
+    start = now() - 80 * 86400
+    db.update_bot(bot, next_charge_at=start, desired=1)
+    cap = db.HOSTING_CATCH_UP_DAYS
+    rows = db.charge_due_bots(100, ts=start + 80 * 86400)
+    assert rows[0].ok is True and rows[0].days == cap and rows[0].amount == cap * 100
+    assert db.bot(bot)["next_charge_at"] == start + cap * 86400
+    rest = db.charge_due_bots(100, ts=start + 80 * 86400)
+    assert rest[0].ok is True and rest[0].days == cap
+    assert db.bot(bot)["next_charge_at"] == start + 2 * cap * 86400
+
+
+def test_idea_add_and_set_status_use_transaction(db):
+    db.upsert_user(1, None, "A")
+    iid = db.idea_add(1, "Нужен тёмный режим")
+    assert db.idea_get(iid)["status"] == "new"
+    assert db.idea_set_status(iid, "hidden") is True
+    assert db.idea_get(iid)["status"] == "hidden"
+    assert db.idea_set_status(999, "hidden") is False

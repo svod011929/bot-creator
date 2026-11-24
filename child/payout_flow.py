@@ -16,6 +16,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.core import ChildApp, safe_send, wd_kb
 from child.db import fmt
+from child.money import from_minor
 from child.payouts import (
     JOB_AWAITING,
     dumps_destination,
@@ -60,12 +61,12 @@ def build_job(app: ChildApp, destination: dict[str, Any], amount: float) -> dict
     rate = cfg.get("lavepay_unit_rate")
     if kind == "usdt" and rate:
         try:
-            payload["amount_asset"] = format_usdt(float(amount) * float(rate))
+            payload["amount_asset"] = format_usdt(float(from_minor(amount)) * float(rate))
         except (TypeError, ValueError):
             pass
     elif kind == "rub" and rate:
         try:
-            payload["amount_rub"] = int(float(amount) * float(rate))
+            payload["amount_rub"] = int(float(from_minor(amount)) * float(rate))
         except (TypeError, ValueError):
             pass
     return payload

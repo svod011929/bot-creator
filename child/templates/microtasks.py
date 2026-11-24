@@ -4,7 +4,6 @@ from __future__ import annotations
 import html
 import json
 import logging
-import math
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -14,6 +13,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from child.db import fmt, now
 from child.mgram_proxy import check_completion, fetch_pending_result
+from child.money import as_minor, to_minor
 from child.templates import Setting, TemplateInfo
 from child.withdrawals import is_owner
 
@@ -167,8 +167,11 @@ def _submit_proof(app, uid: int, tid: int, proof: str) -> tuple[str | None, str,
         if not ok:
             return None, reason, None
         status = "approved" if task["approval_mode"] == "auto" else "pending"
-        reward = task["reward"]
-        if status == "approved" and (not math.isfinite(reward) or reward < 0):
+        try:
+            reward = as_minor(task["reward"])
+        except ValueError:
+            return None, "Задание больше недоступно.", None
+        if status == "approved" and reward < 0:
             return None, "Задание больше недоступно.", None
         ts = now()
         if status == "approved":
@@ -246,7 +249,10 @@ def build_router(app) -> Router:
                 tid = task.get("id")
                 if not tid or tid in done:
                     continue
-                reward = float(task.get("reward") or 0)
+                try:
+                    reward = to_minor(task.get("reward") or 0)
+                except ValueError:
+                    continue
                 btn_text = task.get("button_text") or task.get("title") or "Выполнить"
                 lines.append(
                     f"• 📡 {html.escape(str(btn_text))} — {fmt(reward)} {app.s['currency']} (MGRAM)"
@@ -351,7 +357,11 @@ def build_router(app) -> Router:
         if not task:
             await cb.answer("Задание недоступно или уже выполнено", show_alert=True)
             return
-        reward = float(task.get("reward") or 0)
+        try:
+            reward = to_minor(task.get("reward") or 0)
+        except ValueError:
+            await cb.answer("Задание недоступно или уже выполнено", show_alert=True)
+            return
         link = str(task.get("link") or "")
         text = (
             f"📡 <b>Задание MGRAM</b>\n\n"
@@ -388,7 +398,15 @@ def build_router(app) -> Router:
             await cb.answer("Задание ещё не выполнено. Попробуйте снова после выполнения.", show_alert=True)
             return
         shown = app.db.one("SELECT reward FROM micro_mgram_shown WHERE user_id=? AND task_id=?", uid, tid)
-        reward = result.reward if result.reward is not None else (float(shown["reward"]) if shown else None)
+        try:
+            if result.reward is not None:
+                reward = to_minor(result.reward)
+            elif shown:
+                reward = as_minor(shown["reward"])
+            else:
+                reward = None
+        except ValueError:
+            reward = None
         if reward is None:
             await cb.answer("Не удалось определить награду. Попробуйте позже.", show_alert=True)
             return
@@ -439,7 +457,7 @@ def build_router(app) -> Router:
     async def invite(message: Message) -> None:
         me = await message.bot.get_me()
         link = f"https://t.me/{me.username}?start={message.from_user.id}"
-        reward = app.s.get("ref_reward") or 0
+        reward = to_minor(app.s.get("ref_reward") or 0)
         await message.answer(
             f"Приглашайте друзей по ссылке:\n<code>{link}</code>\n\n"
             f"Награда за друга: {fmt(reward)} {app.s['currency']}"
@@ -450,8 +468,9 @@ def build_router(app) -> Router:
 
 def build_admin_router(app) -> Router:
     r = Router(name="microtasks-admin")
-    r.message.filter(F.from_user.id == app.owner_id)
-    r.callback_query.filter(F.from_user.id == app.owner_id)
+    from child.withdrawals import LiveOwnerFilter
+    r.message.filter(LiveOwnerFilter(app))
+    r.callback_query.filter(LiveOwnerFilter(app))
 
     def tasks_kb():
         rows = app.db.all("SELECT id, title, is_active FROM micro_tasks ORDER BY id DESC LIMIT 30")
@@ -494,8 +513,8 @@ def build_admin_router(app) -> Router:
     @r.message(TaskCreate.reward)
     async def step_reward(message: Message, state: FSMContext) -> None:
         try:
-            reward = float(message.text.replace(",", "."))
-            if not math.isfinite(reward) or reward <= 0:
+            reward = to_minor((message.text or "").replace(",", "."))
+            if reward <= 0:
                 raise ValueError
         except ValueError:
             await message.answer("Введите положительное число.")
@@ -622,15 +641,12 @@ def build_admin_router(app) -> Router:
         if not is_owner(app, cb.from_user.id):
             await cb.answer("Нет доступа", show_alert=True)
             return
-        # Авто-отклонение старых заявок
-        hours = int(app.s.get("auto_reject_hours") or 48)
-        if hours > 0:
-            cutoff = now() - hours * 3600
-            app.db.exec(
-                "UPDATE micro_submissions SET status='rejected', comment='Авто-отклонение по сроку', decided_at=? "
-                "WHERE status='pending' AND created_at < ?",
-                now(), cutoff
-            )
+        # Авто-отклонение старых заявок (то же правило, что и у фоновой задачи)
+        try:
+            hours = int(app.s.get("auto_reject_hours") or 48)
+        except (TypeError, ValueError):
+            hours = 48
+        app.db.reject_stale_micro_submissions(hours)
         page = _callback_int(cb.data, prefix="mt:admin:queue:")
         if page is None:
             await cb.answer("Очередь недоступна", show_alert=True)

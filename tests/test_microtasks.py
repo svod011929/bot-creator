@@ -257,3 +257,53 @@ async def test_broken_proof_types_do_not_crash_task_list(tmp_path, bot, session)
     await feed(msg_update(A, "📋 Задания"))
     texts = [m.text for m in session.of(SendMessage)]
     assert any("Доступные задания" in (t or "") or "t" in (t or "") for t in texts)
+
+
+def test_reject_stale_uses_same_rule_as_queue(db):
+    db.upsert_user(100, "u", "User", None)
+    task = _task(db, mode="manual", reward=10)
+    old = now() - 49 * 3600
+    fresh = now() - 10
+    db.exec(
+        "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES (100, ?, 'old', 'pending', ?)",
+        task["id"], old,
+    )
+    db.exec(
+        "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES (100, ?, 'new', 'pending', ?)",
+        task["id"], fresh,
+    )
+    db.exec(
+        "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES (100, ?, 'done', 'approved', ?)",
+        task["id"], old,
+    )
+    assert db.reject_stale_micro_submissions(48) == 1
+    rows = {r["proof"]: r["status"] for r in db.all("SELECT proof, status, comment FROM micro_submissions")}
+    assert rows["old"] == "rejected"
+    assert rows["new"] == "pending"
+    assert rows["done"] == "approved"
+    stale = db.one("SELECT comment FROM micro_submissions WHERE proof='old'")
+    assert stale["comment"] == "Авто-отклонение по сроку"
+    assert db.reject_stale_micro_submissions(48) == 0
+    assert db.reject_stale_micro_submissions(0) == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_claims_loop_rejects_and_can_be_stopped(tmp_path, bot):
+    from child.core import start_maintenance_tasks, stop_maintenance_tasks
+    from tests.test_child_bots import make
+
+    app, _feed = make(tmp_path, "microtasks", bot)
+    app.s["auto_reject_hours"] = 48
+    task = _task(app.db, mode="manual")
+    app.db.upsert_user(100, "u", "User", None)
+    app.db.exec(
+        "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES (100, ?, 'old', 'pending', ?)",
+        task["id"], now() - 49 * 3600,
+    )
+    tasks = start_maintenance_tasks(app, every=0.05)
+    assert tasks
+    import asyncio
+    await asyncio.sleep(0.2)
+    assert app.db.one("SELECT status FROM micro_submissions")["status"] == "rejected"
+    await stop_maintenance_tasks(app)
+    assert app._maintenance_tasks == []

@@ -207,14 +207,13 @@ class Ctx:
             await asyncio.sleep(every)
 
     async def apply_changes(self, bot_id: int) -> None:
-        """Переписывает config.json и перезапускает бота, если он запущен."""
+        """Write config.json first so a running child can reread the new owner immediately, then restart if running."""
         b = self.db.bot(bot_id)
         if not b:
             return
+        self.sup.write_files(bot_id)
         if b["desired"]:
             await self.sup.restart(bot_id, require_desired=True)
-        else:
-            self.sup.write_files(bot_id)
 
     async def fulfil_payload(self, uid: int, payload: str, amount: int, via: str = "LavePay") -> str:
         """Apply data atomically, then perform committed runtime work."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-import math
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -32,6 +31,7 @@ from child import templates
 from child.db import ChildDB, fmt
 from child.engagement import Engagement, private_observation
 from child.files import read_config, read_settings, write_setting
+from child.money import to_minor
 from child.piarflow import CHECK_CB as PF_CHECK_CB
 from child.piarflow import PiarFlowGate
 from child.subscription import INVITE_URL, PUBLIC_URL, USERNAME, GateResult, SubscriptionGate, parse_channel
@@ -168,10 +168,21 @@ class ChildApp:
 
     @property
     def owner_id(self) -> int:
+        """Current owner from config.json, not the value cached at process start."""
+        from child.files import read_config
+        try:
+            cfg = read_config(self.dir)
+            owner = cfg.get("owner_id") if isinstance(cfg, dict) else None
+            if type(owner) is int:
+                self.cfg["owner_id"] = owner
+                return owner
+        except (OSError, ValueError, TypeError):
+            pass
         return int(self.cfg["owner_id"])
 
     def is_owner(self, uid: int) -> bool:
-        return uid == self.owner_id
+        from child.withdrawals import is_owner as live_owner
+        return live_owner(self, uid)
 
     @property
     def s(self) -> dict[str, Any]:
@@ -330,7 +341,7 @@ def build_core_router(app: ChildApp) -> Router:
 
     async def after_gate(message: Message, uid: int) -> None:
         """Пользователь прошёл проверку подписки: награда пригласившему и меню."""
-        reward = float(app.s.get("ref_reward", 0) or 0)
+        reward = to_minor(app.s.get("ref_reward", 0) or 0)
         ref_id = app.db.reward_referrer_once(uid, reward)
         if ref_id and reward > 0:
             await safe_send(message.bot, ref_id,
@@ -427,7 +438,7 @@ def build_core_router(app: ChildApp) -> Router:
         u = app.db.user(message.from_user.id)
         if not u:
             return
-        min_w = float(app.s.get("min_withdraw", 0) or 0)
+        min_w = to_minor(app.s.get("min_withdraw", 0) or 0)
         if u["balance"] < min_w or u["balance"] <= 0:
             await message.answer(
                 f"💸 Минимальная сумма вывода: {fmt(min_w)} {app.currency}\nВаш баланс: {fmt(u['balance'])} {app.currency}"
@@ -448,13 +459,13 @@ def build_core_router(app: ChildApp) -> Router:
     @r.message(Withdraw.amount, ~F.text.in_(getattr(app.template, "STATE_ESCAPE_TEXTS", ())))
     async def withdraw_amount(message: Message, state: FSMContext) -> None:
         try:
-            amount = float((message.text or "").replace(",", "."))
+            amount = to_minor((message.text or "").replace(",", "."))
         except ValueError:
             await message.answer("Введите число.")
             return
         u = app.db.user(message.from_user.id)
-        min_w = float(app.s.get("min_withdraw", 0) or 0)
-        if not math.isfinite(amount) or amount <= 0 or amount < min_w or amount > u["balance"]:
+        min_w = to_minor(app.s.get("min_withdraw", 0) or 0)
+        if amount <= 0 or amount < min_w or amount > u["balance"]:
             await message.answer(f"Сумма должна быть от {fmt(min_w)} до {fmt(u['balance'])} {app.currency}.")
             return
         from child.payout_flow import start_method_choice
@@ -570,8 +581,9 @@ def _user_card_kb(u) -> InlineKeyboardMarkup:
 
 def build_admin_router(app: ChildApp) -> Router:
     r = Router(name="owner-admin")
-    r.message.filter(F.from_user.id == app.owner_id)
-    r.callback_query.filter(F.from_user.id == app.owner_id)
+    from child.withdrawals import LiveOwnerFilter
+    r.message.filter(LiveOwnerFilter(app))
+    r.callback_query.filter(LiveOwnerFilter(app))
     r.message.filter(F.chat.type == "private")
     r.callback_query.filter(F.message.chat.type == "private")
 
@@ -868,3 +880,44 @@ def build_admin_router(app: ChildApp) -> Router:
         )
 
     return r
+
+
+STALE_CLAIMS_EVERY = 600
+
+
+async def stale_claims_loop(app: ChildApp, every: float = STALE_CLAIMS_EVERY) -> None:
+    """Periodically apply the same auto-reject rule as the owner queue."""
+    if app.info.key != "microtasks":
+        return
+    log = logging.getLogger("child.microtasks")
+    while True:
+        try:
+            try:
+                hours = int(app.s.get("auto_reject_hours") or 48)
+            except (TypeError, ValueError):
+                hours = 48
+            n = app.db.reject_stale_micro_submissions(hours)
+            if n:
+                log.info("auto-rejected stale submissions count=%s", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("auto-reject failed")
+        await asyncio.sleep(every)
+
+
+def start_maintenance_tasks(app: ChildApp, *, every: float = STALE_CLAIMS_EVERY) -> list[asyncio.Task]:
+    tasks: list[asyncio.Task] = []
+    if app.info.key == "microtasks":
+        tasks.append(asyncio.create_task(stale_claims_loop(app, every=every), name="stale-micro-submissions"))
+    app._maintenance_tasks = tasks
+    return tasks
+
+
+async def stop_maintenance_tasks(app: ChildApp) -> None:
+    tasks = getattr(app, "_maintenance_tasks", [])
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    app._maintenance_tasks = []

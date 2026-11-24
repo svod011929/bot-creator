@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
+from child.money import to_minor
 from creator.app import build_dispatcher
 from creator.content import callback, encode
 from creator.content_views import bind
@@ -102,7 +103,7 @@ async def test_create_preview_save_edit_publish_and_copy_from_creator(runtime, s
     await w.feed(cb_update(OWNER, w.cb("calendar:0")))
     assert "Календарь контента" in last_screen(session).text
     assert "Revised in Creator" in last_screen(session).text
-    assert w.app.db.user(OWNER)["balance"] == 17.5
+    assert w.app.db.user(OWNER)["balance"] == to_minor(17.5)
 
 
 async def test_form_survives_cancel_and_new_dispatcher(runtime, session):

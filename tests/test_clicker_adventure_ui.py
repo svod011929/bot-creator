@@ -6,6 +6,7 @@ import pytest
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import Update
 
+from child.money import to_minor
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import OWNER, A, B, make
 
@@ -34,7 +35,7 @@ async def test_complete_first_session_in_telegram(tmp_path, bot, session):
     assert "adv:missions:story" in callbacks(last_screen(session))
     # Actual tap accounting is shared with the router; no waiting or real Telegram calls.
     for _ in range(5):
-        app.game.tap(A, base_reward=1)
+        app.game.tap(A, base_reward=to_minor(1))
     await feed(cb_update(A, "adv:missions:story"))
     claim = next(v for v in callbacks(last_screen(session)) if v.startswith("adv:mission:first_taps:"))
     await feed(cb_update(A, claim))
@@ -54,7 +55,7 @@ async def test_complete_first_session_in_telegram(tmp_path, bot, session):
     assert "Лист следопыта" in session.of(AnswerCallbackQuery)[-1].text
     await feed(cb_update(A, "adv:collection"))
     assert "Первый маршрут" in last_screen(session).text
-    assert app.db.user(A)["balance"] == 5
+    assert app.db.user(A)["balance"] == to_minor(5)
     assert app.game.overview(A)["profile"]["xp_total"] == 35
     await feed(msg_update(A, "👤 Профиль"))
     assert "Общий опыт: 35 XP" in last_screen(session).text

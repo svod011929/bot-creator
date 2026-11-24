@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from child.db import ChildDB
+from child.money import to_minor
 from child.referral_club import SEED, WIZARD_FIELDS, ClubError, ReferralClub, validate_campaign
 
 OWNER, A, B, C = 1, 10, 20, 30
@@ -36,13 +37,13 @@ def qualify(club, uid):
 
 def test_seed_and_reopen_do_not_change_wallet_or_duplicate_campaign(env):
     club, db, clock = env
-    db.add_balance(A, 17.5)
+    db.add_balance(A, to_minor(17.5))
     before = tuple(db.user(A))
     ReferralClub(db, owner_id=OWNER, clock=lambda: clock[0])
     assert tuple(db.user(A)) == before
     assert db.scalar("SELECT COUNT(*) FROM ref_campaigns") == 1
     assert club.summary(A)["member"]["points"] == 20
-    assert db.user(A)["balance"] == 17.5
+    assert db.user(A)["balance"] == to_minor(17.5)
 
 
 def test_qualified_friend_rewards_once_and_preserves_legacy_rule(env):

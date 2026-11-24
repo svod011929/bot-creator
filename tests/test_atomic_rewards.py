@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, Telegra
 from aiogram.methods import AnswerCallbackQuery, GetChatMember
 
 from child.db import ChildDB
+from child.money import to_minor
 from child.templates import Setting
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import A, B, make
@@ -103,7 +104,7 @@ async def test_task_api_failure_never_rewards(tmp_path, bot, session, monkeypatc
 async def test_task_credit_failure_rolls_back_completion(tmp_path, bot):
     app, feed = make(tmp_path, "starbot", bot)
     await feed(msg_update(A, "/start"))
-    app.db.exec("INSERT INTO tasks(title,url,reward) VALUES(?,?,?)", "Synthetic", "https://t.me/test", 2)
+    app.db.exec("INSERT INTO tasks(title,url,reward) VALUES(?,?,?)", "Synthetic", "https://t.me/test", to_minor(2))
     app.db.exec("CREATE TRIGGER fault BEFORE UPDATE OF balance ON users BEGIN SELECT RAISE(ABORT, 'injected'); END")
     with pytest.raises(sqlite3.IntegrityError):
         await feed(cb_update(A, "task:1"))
@@ -111,21 +112,21 @@ async def test_task_credit_failure_rolls_back_completion(tmp_path, bot):
     app.db.exec("DROP TRIGGER fault")
     await feed(cb_update(A, "task:1"))
     await feed(cb_update(A, "task:1"))
-    assert app.db.user(A)["balance"] == 2
+    assert app.db.user(A)["balance"] == to_minor(2)
     app.db.conn.close()
 
 
 async def test_upgrade_failure_rolls_back_spend(tmp_path, bot):
     app, feed = make(tmp_path, "clicker", bot)
     await feed(msg_update(A, "/start"))
-    app.db.add_balance(A, 200)
+    app.db.add_balance(A, to_minor(200))
     app.db.exec("CREATE TRIGGER fault BEFORE UPDATE OF level ON users BEGIN SELECT RAISE(ABORT, 'injected'); END")
     with pytest.raises(sqlite3.IntegrityError):
         await feed(cb_update(A, "upg"))
-    assert app.db.user(A)["balance"] == 200 and app.db.user(A)["level"] == 1
+    assert app.db.user(A)["balance"] == to_minor(200) and app.db.user(A)["level"] == 1
     app.db.exec("DROP TRIGGER fault")
     await feed(cb_update(A, "upg"))
-    assert app.db.user(A)["balance"] == 100 and app.db.user(A)["level"] == 2
+    assert app.db.user(A)["balance"] == to_minor(100) and app.db.user(A)["level"] == 2
     app.db.conn.close()
 
 

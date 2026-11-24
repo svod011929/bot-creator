@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from child.db import ChildDB
+from child.money import to_minor
 from child.star_catalog import CONSTELLATIONS, starter_cards
 from child.star_journey import EDITOR_FIELDS, JourneyError, StarJourney, period
 
@@ -64,7 +65,7 @@ def card_data(game, **changes):
 
 def test_initialization_is_idempotent_and_never_backfills_wallet(env, tmp_path):
     game, db, clock = env
-    db.add_balance(A, 17.5)
+    db.add_balance(A, to_minor(17.5))
     before = tuple(db.user(A))
     reopened = StarJourney(db, owner_id=OWNER, clock=lambda: clock[0])
     assert db.scalar("SELECT COUNT(*) FROM star_cards") == 24

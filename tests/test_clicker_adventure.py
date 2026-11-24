@@ -9,6 +9,7 @@ import pytest
 
 from child.clicker_game import ClickerGame, GameError, period_key
 from child.db import ChildDB
+from child.money import to_minor
 
 UID = 10
 TZ = ZoneInfo("Europe/Moscow")
@@ -26,14 +27,14 @@ def game_env(tmp_path):
 
 def first_mission(game):
     for _ in range(5):
-        game.tap(UID, base_reward=1)
+        game.tap(UID, base_reward=to_minor(1))
     mission = next(m for m in game.missions(UID, "story") if m["key"] == "first_taps")
     return game.claim_mission(UID, "first_taps", mission["period"])
 
 
 def test_schema_and_profile_leave_existing_wallet_untouched(game_env):
     game, db, clock = game_env
-    db.add_balance(UID, 123.5)
+    db.add_balance(UID, to_minor(123.5))
     db.exec("UPDATE users SET level=4,clicks=99 WHERE id=?", UID)
     before = tuple(db.user(UID))
     profile = game.overview(UID)["profile"]
@@ -47,12 +48,12 @@ def test_schema_and_profile_leave_existing_wallet_untouched(game_env):
 def test_taps_and_first_mission_credit_xp_once(game_env):
     game, db, clock = game_env
     assert first_mission(game) == 20
-    assert db.user(UID)["balance"] == db.user(UID)["clicks"] == 5
+    assert db.user(UID)["balance"] == to_minor(5) and db.user(UID)["clicks"] == 5
     assert game.overview(UID)["profile"]["xp_total"] == 20
     with pytest.raises(GameError):
         game.claim_mission(UID, "first_taps", "once")
     assert db.scalar("SELECT COUNT(*) FROM clicker_xp_entries") == 1
-    assert db.user(UID)["balance"] == 5
+    assert db.user(UID)["balance"] == to_minor(5)
 
 
 def test_incomplete_and_forged_missions_cannot_award(game_env):
@@ -77,7 +78,7 @@ def test_first_session_has_strategy_and_a_completed_route(game_env):
         game.claim_expedition(UID, trip["id"])
     clock[0] = trip["ready_at"]
     assert game.claim_expedition(UID, trip["id"])["xp"] == 15
-    assert db.user(UID)["balance"] == 5
+    assert db.user(UID)["balance"] == to_minor(5)
     with pytest.raises(GameError):
         game.claim_expedition(UID, trip["id"])
     state = game.overview(UID)
@@ -144,7 +145,7 @@ def test_daily_and_weekly_windows_and_streak(game_env):
     game, db, clock = game_env
     clock[0] = int(datetime(2026, 11, 15, 23, 59, 50, tzinfo=TZ).timestamp())
     for _ in range(20):
-        game.tap(UID, base_reward=1)
+        game.tap(UID, base_reward=to_minor(1))
     day = next(m for m in game.missions(UID, "day") if m["key"] == "daily_taps")
     week = game.missions(UID, "week")[0]["period"]
     assert game.claim_mission(UID, day["key"], day["period"]) == 15
@@ -154,10 +155,10 @@ def test_daily_and_weekly_windows_and_streak(game_env):
     assert game.missions(UID, "week")[0]["period"] != week
     with pytest.raises(GameError):
         game.claim_mission(UID, day["key"], day["period"])
-    game.tap(UID, base_reward=1)
+    game.tap(UID, base_reward=to_minor(1))
     assert game.overview(UID)["profile"]["active_streak"] == 2
     clock[0] += 2 * 86400
-    game.tap(UID, base_reward=1)
+    game.tap(UID, base_reward=to_minor(1))
     assert game.overview(UID)["profile"]["active_streak"] == 1
     assert game.overview(UID)["profile"]["best_streak"] == 2
 
@@ -193,14 +194,14 @@ def test_tap_progress_failure_also_rolls_back_legacy_wallet(game_env):
     game, db, clock = game_env
     db.exec("CREATE TRIGGER fault BEFORE INSERT ON clicker_counters BEGIN SELECT RAISE(ABORT, 'injected'); END")
     with pytest.raises(sqlite3.IntegrityError):
-        game.tap(UID, base_reward=3)
+        game.tap(UID, base_reward=to_minor(3))
     assert db.user(UID)["balance"] == db.user(UID)["clicks"] == 0
 
 
 def test_competing_mission_claims_credit_once(game_env, tmp_path):
     game, db, clock = game_env
     for _ in range(5):
-        game.tap(UID, base_reward=1)
+        game.tap(UID, base_reward=to_minor(1))
     second = ChildDB(tmp_path / "game.db")
     other = ClickerGame(second, clock=lambda: clock[0])
     barrier = threading.Barrier(2)
@@ -235,7 +236,7 @@ def test_user_cannot_claim_another_players_expedition(game_env):
 def test_mission_and_skill_failures_preserve_available_xp(game_env):
     game, db, clock = game_env
     for _ in range(5):
-        game.tap(UID, base_reward=1)
+        game.tap(UID, base_reward=to_minor(1))
     db.exec("CREATE TRIGGER fault BEFORE INSERT ON clicker_xp_entries BEGIN SELECT RAISE(ABORT, 'injected'); END")
     with pytest.raises(sqlite3.IntegrityError):
         game.claim_mission(UID, "first_taps", "once")
@@ -311,7 +312,7 @@ def test_fully_reopened_database_preserves_trip_and_skill(game_env, tmp_path):
         p = engine.overview(UID)["profile"]
         assert p["xp_total"] == fresh.scalar("SELECT SUM(delta) FROM clicker_xp_entries WHERE delta>0")
         assert p["xp_available"] == fresh.scalar("SELECT SUM(delta) FROM clicker_xp_entries")
-        assert fresh.user(UID)["balance"] == 5
+        assert fresh.user(UID)["balance"] == to_minor(5)
     finally:
         fresh.conn.close()
 

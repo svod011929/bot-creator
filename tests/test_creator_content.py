@@ -10,6 +10,7 @@ import pytest
 from child.core import ChildApp
 from child.db import ChildDB
 from child.files import read_config, write_config
+from child.money import to_minor
 from child.referral_club import SEED, ClubError
 from child.star_catalog import starter_cards
 from child.star_journey import JourneyError
@@ -36,7 +37,7 @@ def content_env(tmp_path, request):
     path = sup.write_files(bid)
     app = ChildApp(path)
     app.db.upsert_user(OWNER, "owner", "Synthetic owner", None)
-    app.db.add_balance(OWNER, 17.5)
+    app.db.add_balance(OWNER, to_minor(17.5))
     ctx = Ctx(db, cfg, sup)
     w = SimpleNamespace(ctx=ctx, app=app, path=path, id=bid, template=template, code=CODES[template])
     w.open = lambda **kw: open_content(ctx, OWNER, bid, w.code, **kw)
@@ -101,7 +102,7 @@ def test_creator_form_persists_and_does_not_touch_child_form(content_env):
         assert c.owner_data(cid)["status"] == "draft"
     native_after = w.native.wizard_get(OWNER) if w.code == "r" else w.native.editor_get(OWNER)
     assert native_after == native_before
-    assert w.app.db.user(OWNER)["balance"] == 17.5
+    assert w.app.db.user(OWNER)["balance"] == to_minor(17.5)
 
 
 def test_child_and_creator_edits_share_revision_guards(content_env):

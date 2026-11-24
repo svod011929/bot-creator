@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from child.db import ChildDB
+from child.money import to_minor
 
 
 def legacy(path, extra=''):
@@ -39,7 +40,7 @@ def test_old_partial_repeat_and_concurrent_migration(tmp_path, extra):
     assert col['currency_at_request']['type'] == 'TEXT' and col['currency_at_request']['notnull'] == 0
     assert col['resolved_at']['type'] == 'INTEGER' and col['resolved_at']['notnull'] == 0
     rows = db.all('SELECT * FROM withdrawals ORDER BY id')
-    assert len(rows) == 2 and rows[0]['amount'] == 3.5 and rows[1]['status'] == 'paid'
+    assert len(rows) == 2 and rows[0]['amount'] == to_minor(3.5) and rows[1]['status'] == 'paid'
     assert all(r['currency_at_request'] is None and r['resolved_at'] is None for r in rows)
     db.conn.close()
 
@@ -49,8 +50,8 @@ def test_snapshot_first_resolution_and_single_refund(tmp_path, monkeypatch, unit
     import child.db as mod
     db = ChildDB(tmp_path / 'new.db')
     db.upsert_user(10, None, 'fake', None)
-    db.add_balance(10, 20)
-    wid = db.create_withdrawal(10, 3.5, 'fake_secret', currency=unit)
+    db.add_balance(10, to_minor(20))
+    wid = db.create_withdrawal(10, to_minor(3.5), 'fake_secret', currency=unit)
     row = db.withdrawal(wid, uid=10)
     assert row['currency_at_request'] == unit and row['resolved_at'] is None
     monkeypatch.setattr(mod, 'now', lambda: 200)
@@ -58,7 +59,7 @@ def test_snapshot_first_resolution_and_single_refund(tmp_path, monkeypatch, unit
     monkeypatch.setattr(mod, 'now', lambda: 300)
     assert db.resolve_withdrawal(wid, True) is None
     assert db.resolve_withdrawal(wid, False) is None
-    assert db.user(10)['balance'] == 20
+    assert db.user(10)['balance'] == to_minor(20)
     row = db.withdrawal(wid)
     assert row['resolved_at'] == 200 and row['status'] == 'rejected' and row['currency_at_request'] == unit
     db.conn.close()
@@ -136,8 +137,8 @@ def test_competing_connections_only_one_resolution_refund(tmp_path, monkeypatch,
     path = tmp_path / 'shared.db'
     first, second = ChildDB(path), ChildDB(path)
     first.upsert_user(10, None, 'fake', None)
-    first.add_balance(10, 20)
-    wid = first.create_withdrawal(10, 3.5, 'fake', currency='⭐')
+    first.add_balance(10, to_minor(20))
+    wid = first.create_withdrawal(10, to_minor(3.5), 'fake', currency='⭐')
     monkeypatch.setattr(mod, 'now', lambda: 200)
     barrier = threading.Barrier(2)
     # Compete before the transaction, not inside the serialized writer section.
@@ -151,7 +152,7 @@ def test_competing_connections_only_one_resolution_refund(tmp_path, monkeypatch,
     assert sum(r is not None for r in results) == 1
     row = first.withdrawal(wid)
     assert row['resolved_at'] == 200 and row['currency_at_request'] == '⭐'
-    assert first.user(10)['balance'] == (20 if row['status'] == 'rejected' else 16.5)
+    assert first.user(10)['balance'] == (to_minor(20) if row['status'] == 'rejected' else to_minor(16.5))
     first.conn.close()
     second.conn.close()
 
@@ -164,14 +165,19 @@ def test_migration_preserves_existing_user_records_and_balances(tmp_path):
         connection.executescript(SCHEMA.split('CREATE TABLE IF NOT EXISTS withdrawals')[0])
         connection.execute('INSERT INTO users(id,username,full_name,referrer_id,balance,ref_rewarded,created_at) '
                            'VALUES(10,?,?,?,?,?,?)', ('fake', 'test', 20, 17.25, 1, 99))
-        user_cols = [d[0] for d in connection.execute('PRAGMA table_info(users)').fetchall()]
-        before = connection.execute('SELECT * FROM users').fetchall()
         old_withdrawals = connection.execute('SELECT * FROM withdrawals ORDER BY id').fetchall()
     db = ChildDB(path)
     after = db.all('SELECT * FROM users')
-    assert [tuple(row[c] for c in user_cols) for row in after] == before
+    assert len(after) == 1
+    assert after[0]['id'] == 10 and after[0]['username'] == 'fake' and after[0]['full_name'] == 'test'
+    assert after[0]['referrer_id'] == 20 and after[0]['ref_rewarded'] == 1 and after[0]['created_at'] == 99
+    assert after[0]['balance'] == to_minor(17.25)
     assert all(row['banned'] == 0 for row in after)
-    assert [tuple(row)[:6] for row in db.all('SELECT * FROM withdrawals ORDER BY id')] == old_withdrawals
+    got = [tuple(row)[:6] for row in db.all('SELECT * FROM withdrawals ORDER BY id')]
+    # legacy rows were (id, user_id, amount, details, status, created_at)
+    assert [(r[0], r[1], to_minor(r[2]), r[3], r[4], r[5]) for r in old_withdrawals] == [
+        (g[0], g[1], g[2], g[3], g[4], g[5]) for g in got
+    ]
     db.conn.close()
 
 

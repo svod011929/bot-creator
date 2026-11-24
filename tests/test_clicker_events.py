@@ -11,6 +11,7 @@ import pytest
 from child.clicker_events import GRACE, SEED, ClickerEvents, EventError
 from child.clicker_game import GAME_TZ, ClickerGame, period_key
 from child.db import ChildDB
+from child.money import to_minor
 
 OWNER, A, B = 1, 10, 20
 
@@ -55,7 +56,7 @@ def snapshot(db):
 
 def test_example_is_private_draft_and_restart_preserves_existing_users(env):
     w = env
-    w.db.add_balance(A, 123.5)
+    w.db.add_balance(A, to_minor(123.5))
     before = snapshot(w.db)
     ClickerEvents(w.db, owner_id=OWNER, game=w.game, clock=lambda: w.clock[0])
     assert snapshot(w.db) == before
@@ -64,13 +65,13 @@ def test_example_is_private_draft_and_restart_preserves_existing_users(env):
     with pytest.raises(EventError):
         w.events.player_event(A, 1)
     assert w.db.scalar("SELECT COUNT(*) FROM clicker_profiles") == 0
-    assert w.db.user(A)["balance"] == 123.5
+    assert w.db.user(A)["balance"] == to_minor(123.5)
 
 
 def test_goals_count_only_new_actions_and_inflight_trip_is_excluded_even_same_second(env):
     w = env
     for _ in range(7):
-        w.game.tap(A, base_reward=1)
+        w.game.tap(A, base_reward=to_minor(1))
     p = w.game.overview(A)["profile"]
     old = w.game.start_expedition(A, "trail", p["version"])
     cid = publish(w, taps=3, expeditions=1)
@@ -79,7 +80,7 @@ def test_goals_count_only_new_actions_and_inflight_trip_is_excluded_even_same_se
     w.game.claim_expedition(A, old["id"])
     assert w.events.player_event(A, cid)["progress"] == {"taps": 0, "expeditions": 0, "routes": 0}
     for _ in range(3):
-        w.game.tap(A, base_reward=1)
+        w.game.tap(A, base_reward=to_minor(1))
     assert not w.events.player_event(A, cid)["ready"]
     trip(w)
     c = w.events.player_event(A, cid)
@@ -90,7 +91,7 @@ def test_reward_receipt_badge_and_monthly_ranking_leave_wallet_untouched(env):
     w = env
     cid = publish(w, taps=1, expeditions=0, reward=80)
     join(w, cid)
-    w.game.tap(A, base_reward=3)
+    w.game.tap(A, base_reward=to_minor(3))
     before = tuple(w.db.user(A))
     assert w.events.claim(A, cid) == 80
     assert tuple(w.db.user(A)) == before
@@ -124,7 +125,7 @@ def test_join_is_idempotent_and_does_not_reset_progress(env):
     w = env
     cid = publish(w, taps=2, expeditions=0)
     join(w, cid)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     before = snapshot(w.db)
     join(w, cid)
     assert snapshot(w.db) == before
@@ -138,7 +139,7 @@ def test_pause_blocks_entries_but_existing_player_can_finish(env):
     w.events.set_status(OWNER, cid, "paused", 2)
     with pytest.raises(EventError):
         w.events.join(B, cid, 3)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     assert w.events.claim(A, cid) == SEED["reward"]
     w.events.set_status(OWNER, cid, "active", 3)
     join(w, cid, B)
@@ -160,12 +161,12 @@ def test_goals_freeze_at_end_and_late_taps_and_trip_cannot_complete_event(env):
     w = env
     cid = publish(w, days=1, taps=2, expeditions=1)
     join(w, cid)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     p = w.game.overview(A)["profile"]
     t = w.game.start_expedition(A, "trail", p["version"])
     end = w.events.player_event(A, cid)["ends_at"]
     w.clock[0] = end
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     w.game.claim_expedition(A, t["id"])
     c = w.events.player_event(A, cid)
     assert c["progress"] == {"taps": 1, "expeditions": 0, "routes": 0}
@@ -182,7 +183,7 @@ def test_seven_day_grace_claims_on_last_second_and_expires_exactly(env):
     cid = publish(w, days=1, taps=1, expeditions=0)
     for uid in (A, B):
         join(w, cid, uid)
-        w.game.tap(uid, base_reward=1)
+        w.game.tap(uid, base_reward=to_minor(1))
     end = w.events.player_event(A, cid)["ends_at"]
     w.clock[0] = end + GRACE - 1
     assert w.events.claim(A, cid) == SEED["reward"]
@@ -197,7 +198,7 @@ def test_claimed_xp_counts_in_month_of_claim_and_calendar_crosses_year(env):
     w.clock[0] = int(datetime(2026, 12, 31, 12, tzinfo=GAME_TZ).timestamp())
     cid = publish(w, days=1, taps=1, expeditions=0)
     join(w, cid)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     w.clock[0] += 86400
     w.events.claim(A, cid)
     assert w.db.scalar("SELECT value FROM clicker_counters WHERE user_id=? AND period='month:202701' AND metric='xp'", A) == 40
@@ -208,7 +209,7 @@ def test_clock_rollback_cannot_complete_or_claim(env):
     w = env
     cid = publish(w, taps=1, expeditions=0)
     join(w, cid)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     w.clock[0] -= 1
     with pytest.raises(EventError):
         w.events.claim(A, cid)
@@ -305,7 +306,7 @@ def test_reward_and_receipt_rollback_together_on_database_failure(env, fault):
     w = env
     cid = publish(w, taps=1, expeditions=0)
     join(w, cid)
-    w.game.tap(A, base_reward=1)
+    w.game.tap(A, base_reward=to_minor(1))
     trigger = "BEFORE INSERT ON clicker_xp_entries" if fault == "xp" else "BEFORE UPDATE ON clicker_event_players"
     w.db.exec(f"CREATE TRIGGER fail {trigger} BEGIN SELECT RAISE(ABORT,'synthetic'); END")
     before = snapshot(w.db)
@@ -344,7 +345,7 @@ def test_two_database_connections_cannot_double_claim_or_publish_overlapping_eve
     if action == "claim":
         first = second = publish(w, taps=1, expeditions=0)
         join(w, first)
-        w.game.tap(A, base_reward=1)
+        w.game.tap(A, base_reward=to_minor(1))
     else:
         first = w.events.create_draft(OWNER, SEED)
         second = w.events.create_draft(OWNER, SEED)
@@ -394,7 +395,7 @@ def test_first_claim_ranking_uses_receipts_not_partial_progress(env):
     cid = publish(w, taps=1, expeditions=0)
     for uid in (A, B):
         join(w, cid, uid)
-        w.game.tap(uid, base_reward=1)
+        w.game.tap(uid, base_reward=to_minor(1))
     assert w.events.leaderboard(cid) == []
     w.events.claim(B, cid)
     w.clock[0] += 1

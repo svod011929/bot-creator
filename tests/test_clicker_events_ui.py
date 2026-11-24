@@ -15,6 +15,7 @@ from child.clicker_events_views import player_view
 from child.clicker_game import GAME_TZ
 from child.core import ChildApp
 from child.files import read_config, write_config
+from child.money import to_minor
 from creator import content_views as views
 from creator.app import build_dispatcher
 from creator.config import Config
@@ -61,7 +62,7 @@ async def test_player_can_join_complete_claim_and_find_badge_and_xp_history(tmp_
     assert "Награда получена" in last_screen(session).text
     await feed(cb_update(A, f"evt:claim:{cid}"))
     assert session.of(AnswerCallbackQuery)[-1].show_alert
-    assert app.db.user(A)["balance"] == 1
+    assert app.db.user(A)["balance"] == to_minor(1)
     assert app.game.overview(A)["profile"]["xp_total"] == 40
     await feed(cb_update(A, "evt:awards:0"))
     assert SEED["badge"] in last_screen(session).text
@@ -180,7 +181,7 @@ async def creator_env(tmp_path, bot):
     path = sup.write_files(bid)
     app = ChildApp(path)
     app.db.upsert_user(OWNER, None, "Owner", None)
-    app.db.add_balance(OWNER, 17.5)
+    app.db.add_balance(OWNER, to_minor(17.5))
     ctx = Ctx(db, cfg, sup)
     dp = build_dispatcher(ctx)
     w = SimpleNamespace(ctx=ctx, app=app, path=path, id=bid, dp=dp)
@@ -237,7 +238,7 @@ async def test_creator_full_editor_preview_publish_pause_copy_and_calendar(creat
     await w.feed(cb_update(OWNER, w.cb("calendar:0")))
     assert "Календарь контента" in last_screen(session).text
     assert "Edited festival" in last_screen(session).text
-    assert w.app.db.user(OWNER)["balance"] == 17.5
+    assert w.app.db.user(OWNER)["balance"] == to_minor(17.5)
     assert w.app.db.scalar("SELECT COUNT(*) FROM clicker_profiles") == 0
 
 

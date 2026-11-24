@@ -7,6 +7,7 @@ from aiogram.methods import AnswerCallbackQuery, CopyMessage, SendMessage
 from child.__main__ import build_dispatcher
 from child.core import ChildApp
 from child.files import write_config, write_setting
+from child.money import to_minor
 from tests.conftest import cb_update, msg_update
 
 OWNER = 1
@@ -34,16 +35,16 @@ async def test_clicker(tmp_path, bot, session):
     assert "👆 Кликать" in kb and "💸 Вывод" in kb and "⚙️ Админка" not in kb
 
     await feed(cb_update(A, "tap"))
-    assert app.db.user(A)["balance"] == 1 and app.db.user(A)["clicks"] == 1
+    assert app.db.user(A)["balance"] == to_minor(1) and app.db.user(A)["clicks"] == 1
     await feed(cb_update(A, "tap"))  # слишком быстро — антиспам
     assert app.db.user(A)["clicks"] == 1
     time.sleep(0.3)
     app.set("click_reward", 200)
     await feed(cb_update(A, "tap"))
-    assert app.db.user(A)["balance"] == 201
+    assert app.db.user(A)["balance"] == to_minor(201)
 
     await feed(cb_update(A, "upg"))  # 100 * 1^2
-    assert app.db.user(A)["level"] == 2 and app.db.user(A)["balance"] == 101
+    assert app.db.user(A)["level"] == 2 and app.db.user(A)["balance"] == to_minor(101)
     await feed(cb_update(A, "upg"))  # 100 * 2^2 = 400 — не хватает
     assert app.db.user(A)["level"] == 2
 
@@ -57,18 +58,18 @@ async def test_withdraw_flow(tmp_path, bot, session):
     await feed(msg_update(A, "/start"))
     await feed(msg_update(A, "💸 Вывод"))
     assert "Минимальная сумма" in session.texts()[-1]
-    app.db.add_balance(A, 100)
+    app.db.add_balance(A, to_minor(100))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, "500"))
     assert "Сумма должна быть" in session.texts()[-1]
     await feed(msg_update(A, "60"))
     await feed(msg_update(A, "card 4444"))
-    assert app.db.user(A)["balance"] == 40
+    assert app.db.user(A)["balance"] == to_minor(40)
     owner_msg = [m for m in session.of(SendMessage) if m.chat_id == OWNER][-1]
     assert "Заявка на вывод №1" in owner_msg.text
     # отклонение возвращает деньги
     await feed(cb_update(OWNER, "wd:no:1"))
-    assert app.db.user(A)["balance"] == 100
+    assert app.db.user(A)["balance"] == to_minor(100)
     await feed(cb_update(OWNER, "wd:ok:1"))  # повторно не обрабатывается
     assert app.db.one("SELECT status FROM withdrawals WHERE id=1")["status"] == "rejected"
     # не-владелец не может решать заявки
@@ -95,9 +96,9 @@ async def test_refbot_gate_and_reward(tmp_path, bot, session):
     assert app.db.user(A)["balance"] == 0
     session.member_status = "member"
     await feed(cb_update(B, "chk_sub"))
-    assert app.db.user(A)["balance"] == 5
+    assert app.db.user(A)["balance"] == to_minor(5)
     await feed(cb_update(B, "chk_sub"))  # повторно не начисляется
-    assert app.db.user(A)["balance"] == 5
+    assert app.db.user(A)["balance"] == to_minor(5)
     await feed(msg_update(A, "🏆 Топ рефоводов"))
     assert "— 1 👥" in session.texts()[-1]
 
@@ -109,9 +110,9 @@ async def test_starbot_bonus_tasks_admin(tmp_path, bot, session):
     assert "⚙️ Админка" in kb
     await feed(msg_update(A, "/start"))
     await feed(msg_update(A, "🎁 Ежедневный бонус"))
-    assert app.db.user(A)["balance"] == 0.5
+    assert app.db.user(A)["balance"] == to_minor(0.5)
     await feed(msg_update(A, "🎁 Ежедневный бонус"))
-    assert app.db.user(A)["balance"] == 0.5 and "Следующий бонус" in session.texts()[-1]
+    assert app.db.user(A)["balance"] == to_minor(0.5) and "Следующий бонус" in session.texts()[-1]
 
     # владелец добавляет задание
     await feed(cb_update(OWNER, "adm:tasks"))
@@ -122,11 +123,11 @@ async def test_starbot_bonus_tasks_admin(tmp_path, bot, session):
     await feed(msg_update(A, "📋 Задания"))
     session.member_status = "left"
     await feed(cb_update(A, "task:1"))
-    assert app.db.user(A)["balance"] == 0.5
+    assert app.db.user(A)["balance"] == to_minor(0.5)
     session.member_status = "member"
     await feed(cb_update(A, "task:1"))
     await feed(cb_update(A, "task:1"))
-    assert app.db.user(A)["balance"] == 2.5
+    assert app.db.user(A)["balance"] == to_minor(2.5)
 
     # не-владелец не видит админку
     session.clear()
@@ -219,3 +220,22 @@ async def test_owner_user_filters(tmp_path, bot, session):
     assert "забаненные" in session.texts()[-1] and "всего 1" in session.texts()[-1]
     await feed(cb_update(OWNER, f"adm:u:{A}"))
     assert "ожидают" in session.texts()[-1]
+
+
+async def test_owner_rights_follow_config_without_restart(tmp_path, bot, session):
+    from child.files import read_config, write_config
+    from child.withdrawals import is_owner
+
+    app, feed = make(tmp_path, "clicker", bot)
+    await feed(msg_update(OWNER, "/start"))
+    await feed(msg_update(A, "/start"))
+    assert app.is_owner(OWNER) and is_owner(app, OWNER)
+    cfg = read_config(tmp_path)
+    cfg["owner_id"] = A
+    write_config(tmp_path, cfg)
+    assert app.owner_id == A
+    assert app.is_owner(A) and not app.is_owner(OWNER)
+    await feed(msg_update(OWNER, "⚙️ Админка"))
+    assert not any("Панель владельца" in (t or "") for t in session.texts())
+    await feed(msg_update(A, "⚙️ Админка"))
+    assert any("Панель владельца" in (t or "") for t in session.texts())

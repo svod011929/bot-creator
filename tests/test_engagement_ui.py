@@ -14,6 +14,7 @@ from child.__main__ import build_dispatcher as child_dispatcher
 from child.core import ChildApp
 from child.engagement import observer_actor
 from child.files import write_config
+from child.money import to_minor
 from creator.app import build_dispatcher
 from creator.config import Config
 from creator.db import DB
@@ -71,7 +72,7 @@ async def test_private_start_and_template_goal_are_observed_without_owner_activi
     await w.child(msg_update(PLAYER, "/start"))
     if w.template == "clicker":
         await w.child(cb_update(PLAYER, "tap"))
-        assert w.app.db.user(PLAYER)["balance"] == 1
+        assert w.app.db.user(PLAYER)["balance"] == to_minor(1)
         goal = "tap"
     elif w.template == "refbot":
         await w.child(cb_update(PLAYER, "club:onboard"))
@@ -115,7 +116,7 @@ async def test_activity_error_does_not_change_existing_reward(runtime, session):
     w.app.db.exec("CREATE TRIGGER fault BEFORE INSERT ON engagement_events BEGIN SELECT RAISE(ABORT,'injected'); END")
     if w.template == "clicker":
         await w.child(cb_update(PLAYER, "tap"))
-        assert w.app.db.user(PLAYER)["balance"] == 1
+        assert w.app.db.user(PLAYER)["balance"] == to_minor(1)
         assert w.app.db.user(PLAYER)["clicks"] == 1
         assert w.app.db.scalar("SELECT COUNT(*) FROM engagement_events WHERE kind='tap'") == 0
     elif w.template == "refbot":
@@ -221,7 +222,7 @@ async def test_qualified_friend_records_progress_without_inviter_visit(runtime):
     await w.child(cb_update(FRIEND, f"club:answer:1:1:{revision}"))
     assert w.app.db.scalar("SELECT COUNT(*) FROM engagement_activity WHERE user_id=?", PLAYER) == 1
     assert w.app.db.scalar("SELECT COUNT(*) FROM engagement_events WHERE user_id=? AND kind='qualified'", PLAYER) == 1
-    assert w.app.db.user(PLAYER)["balance"] == 5
+    assert w.app.db.user(PLAYER)["balance"] == to_minor(5)
     clock[0] += 86400
     report = read(w.path / "bot.db", "refbot", now=clock[0])
     assert report["retention"][1]["eligible"] == 1 and report["retention"][1]["returned"] == 0
@@ -264,7 +265,7 @@ async def test_domain_calls_outside_private_observation_scope_are_not_visits(tmp
     app, feed = make(tmp_path, template, bot)
     app.db.upsert_user(PLAYER, None, "Synthetic player", None)
     if template == "clicker":
-        app.game.tap(PLAYER, base_reward=1)
+        app.game.tap(PLAYER, base_reward=to_minor(1))
     elif template == "refbot":
         app.club.choose_interest(PLAYER, "learn", 0)
         app.club.finish_onboarding(PLAYER, 1, 1)

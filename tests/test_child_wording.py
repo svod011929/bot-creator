@@ -3,6 +3,7 @@ import time
 
 from aiogram.methods import SendMessage
 
+from child.money import to_minor
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import OWNER, A, make
 
@@ -17,7 +18,7 @@ def to_user(session):
 
 async def request(app, feed, amount="60"):
     app.set("min_withdraw", 50)
-    app.db.add_balance(A, 100)
+    app.db.add_balance(A, to_minor(100))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, amount))
     await feed(msg_update(A, "card 4444"))
@@ -26,7 +27,7 @@ async def request(app, feed, amount="60"):
 async def test_request_messages_and_owner_buttons(tmp_path, bot, session):
     app, feed = make(tmp_path, "starbot", bot)
     await feed(msg_update(A, "/start"))
-    app.db.add_balance(A, 100)
+    app.db.add_balance(A, to_minor(100))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, "500"))
     assert "⭐" in session.texts()[-1] and "Сумма должна быть" in session.texts()[-1]
@@ -37,7 +38,7 @@ async def test_request_messages_and_owner_buttons(tmp_path, bot, session):
     owner_msg = [m for m in session.of(SendMessage) if m.chat_id == OWNER][-1]
     buttons = [(b.text, b.callback_data) for row in owner_msg.reply_markup.inline_keyboard for b in row]
     assert buttons == [("✅ Отметить выплаченной", "wd:ok:1"), ("❌ Отклонить", "wd:no:1")]
-    assert app.db.user(A)["balance"] == 40
+    assert app.db.user(A)["balance"] == to_minor(40)
 
 
 async def test_decision_notifications_do_not_claim_transfer(tmp_path, bot, session):
@@ -50,7 +51,7 @@ async def test_decision_notifications_do_not_claim_transfer(tmp_path, bot, sessi
     await request(app, feed)
     await feed(cb_update(OWNER, "wd:no:2"))
     assert "№2 отклонена владельцем, средства возвращены на баланс" in to_user(session)[-1]
-    assert app.db.user(A)["balance"] == 140  # 100-60 +100-60 +60 refund
+    assert app.db.user(A)["balance"] == to_minor(140)  # 100-60 +100-60 +60 refund
 
 
 async def test_detail_button_label(tmp_path, bot, session):

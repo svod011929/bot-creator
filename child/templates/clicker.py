@@ -14,6 +14,7 @@ from child.clicker_events_views import BTN_EVENTS
 from child.clicker_events_views import build_router as events_router
 from child.clicker_game import ClickerGame
 from child.db import fmt
+from child.money import to_minor
 from child.templates import Setting, TemplateInfo
 from child.withdrawals import is_owner
 
@@ -122,7 +123,7 @@ def build_router(app) -> Router:
             await cb.answer("Нажмите /start")
             return
         base = int(app.s["click_reward"])
-        u = app.game.tap(uid, base_reward=base)
+        u = app.game.tap(uid, base_reward=to_minor(base))
         power = base * u["level"]
         text, kb = tap_view(u)
         try:
@@ -160,7 +161,7 @@ def build_router(app) -> Router:
             await cb.answer("Максимальный уровень", show_alert=True)
             return
         cost = upgrade_cost(app, u["level"])
-        if not app.game.upgrade_legacy(u["id"], level=u["level"], cost=cost, max_level=int(app.s["max_level"])):
+        if not app.game.upgrade_legacy(u["id"], level=u["level"], cost=to_minor(cost), max_level=int(app.s["max_level"])):
             await cb.answer(f"Не хватает монет или уровень изменился: нужно {cost}. Откройте улучшения заново.",
                             show_alert=True)
             return
@@ -180,7 +181,7 @@ def build_router(app) -> Router:
     async def invite(message: Message) -> None:
         uid = message.from_user.id
         await message.answer(
-            f"👥 Приглашайте друзей и получайте <b>{fmt(float(app.s['ref_reward']))} {app.currency}</b> за каждого!\n\n"
+            f"👥 Приглашайте друзей и получайте <b>{fmt(to_minor(app.s['ref_reward']))} {app.currency}</b> за каждого!\n\n"
             f"Приглашено: {app.db.referrals(uid)}\n🔗 {app.ref_link(uid)}",
             disable_web_page_preview=True,
         )

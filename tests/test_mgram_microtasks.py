@@ -8,6 +8,7 @@ import pytest
 
 from child.db import ChildDB
 from child.mgram_proxy import check_completion, fetch_pending
+from child.money import to_minor
 from child.templates.microtasks import INFO, _mgram_enabled
 from creator.config import Config, load_config
 from creator.db import DB
@@ -121,23 +122,23 @@ def test_completion_requires_explicit_completed_status(payload, expected):
 def test_credit_mgram_task_is_atomic_and_idempotent(tmp_path):
     db = ChildDB(tmp_path / "bot.db")
     db.upsert_user(USER, "u", "User", None)
-    first = db.credit_mgram_task(USER, TASK_ID, 0.77)
-    second = db.credit_mgram_task(USER, TASK_ID, 0.77)
-    db.credit_mgram_task(USER, 999, 1.5)
-    assert first == 0.77
+    first = db.credit_mgram_task(USER, TASK_ID, to_minor(0.77))
+    second = db.credit_mgram_task(USER, TASK_ID, to_minor(0.77))
+    db.credit_mgram_task(USER, 999, to_minor(1.5))
+    assert first == to_minor(0.77)
     assert second is None
-    assert db.user(USER)["balance"] == pytest.approx(2.27)
+    assert db.user(USER)["balance"] == to_minor(0.77) + to_minor(1.5)
     rows = db.all("SELECT task_id, reward FROM micro_mgram_done WHERE user_id=? ORDER BY task_id", USER)
-    assert [(r["task_id"], r["reward"]) for r in rows] == [(999, 1.5), (TASK_ID, 0.77)]
+    assert [(r["task_id"], r["reward"]) for r in rows] == [(999, to_minor(1.5)), (TASK_ID, to_minor(0.77))]
 
 
 def test_credit_rejects_missing_user_and_zero_is_logged_once(tmp_path):
     db = ChildDB(tmp_path / "bot.db")
-    assert db.credit_mgram_task(USER, TASK_ID, 0.5) is None
+    assert db.credit_mgram_task(USER, TASK_ID, to_minor(0.5)) is None
     db.upsert_user(USER, "u", "User", None)
-    assert db.credit_mgram_task(USER, TASK_ID, 0.0) == 0.0
+    assert db.credit_mgram_task(USER, TASK_ID, to_minor(0.0)) == 0
     assert db.user(USER)["balance"] == 0
-    assert db.credit_mgram_task(USER, TASK_ID, 10) is None
+    assert db.credit_mgram_task(USER, TASK_ID, to_minor(10)) is None
     assert db.user(USER)["balance"] == 0
 
 
@@ -277,10 +278,10 @@ async def test_child_refuses_config_that_contains_creator_key(tmp_path):
 def test_credit_uses_confirmed_reward_not_a_guess(tmp_path):
     db = ChildDB(tmp_path / "bot.db")
     db.upsert_user(USER, "u", "User", None)
-    db.remember_mgram_shown(USER, TASK_ID, 0.77)
+    db.remember_mgram_shown(USER, TASK_ID, to_minor(0.77))
     shown = db.one("SELECT reward FROM micro_mgram_shown WHERE user_id=? AND task_id=?", USER, TASK_ID)
     result = completion_of({"ok": True, "data": {"tasks": [COMPLETED]}}, TASK_ID)
-    reward = result.reward if result.reward is not None else float(shown["reward"])
+    reward = to_minor(result.reward) if result.reward is not None else shown["reward"]
     assert result.confirmed
-    assert db.credit_mgram_task(USER, TASK_ID, reward) == pytest.approx(0.77)
-    assert db.user(USER)["balance"] == pytest.approx(0.77)
+    assert db.credit_mgram_task(USER, TASK_ID, reward) == to_minor(0.77)
+    assert db.user(USER)["balance"] == to_minor(0.77)
