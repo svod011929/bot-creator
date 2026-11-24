@@ -9,6 +9,7 @@ from aiogram.methods import AnswerCallbackQuery, CopyMessage, EditMessageText, S
 from aiogram.types import Update
 
 from child.files import write_config
+from child.money import to_minor
 from child.star_journey import period
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import OWNER, A, B, make
@@ -57,7 +58,7 @@ async def test_complete_first_session_collects_constellation_and_keeps_old_bonus
     menu = [b.text for row in session.of(SendMessage)[-1].reply_markup.keyboard for b in row]
     assert menu[0] == "🌌 Созвездия" and "🎁 Ежедневный бонус" in menu
     await feed(msg_update(A, "🎁 Ежедневный бонус"))
-    assert app.db.user(A)["balance"] == 0.5
+    assert app.db.user(A)["balance"] == to_minor(0.5)
     await feed(msg_update(A, "🌌 Созвездия"))
     visit = await click(feed, session, A, "sky:visit:")
     answer = await solve_first_card(app, feed, session)
@@ -71,7 +72,7 @@ async def test_complete_first_session_collects_constellation_and_keeps_old_bonus
     for stale in (visit, answer, build):
         await feed(cb_update(A, stale))
         assert session.of(AnswerCallbackQuery)[-1].show_alert
-    assert app.db.user(A)["balance"] == 0.5
+    assert app.db.user(A)["balance"] == to_minor(0.5)
     await feed(msg_update(A, "👤 Профиль"))
     assert "Игровые искры не включены в баланс" in last_screen(session).text
     await feed(cb_update(A, "sky:rank:month"))
@@ -148,7 +149,7 @@ async def test_new_menu_exits_legacy_forms_without_saving_or_broadcasting(tmp_pa
     app, feed, clock = await setup(tmp_path, bot)
     await feed(msg_update(OWNER, "/start"))
     if form == "withdrawal":
-        app.db.add_balance(OWNER, 100)
+        app.db.add_balance(OWNER, to_minor(100))
         await feed(msg_update(OWNER, "💸 Вывод"))
     elif form == "task":
         await feed(cb_update(OWNER, "tadd"))

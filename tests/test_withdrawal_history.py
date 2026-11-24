@@ -7,6 +7,7 @@ from aiogram.methods import SendMessage
 from aiogram.types import Update
 
 from child.files import read_config, write_config
+from child.money import to_minor
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import OWNER, A, B, make
 
@@ -15,7 +16,7 @@ SECRET = 'fake_payment_<secret>'
 
 def seed(app, uid=A, status='pending', created=100, currency='⭐'):
     app.db.exec('INSERT INTO withdrawals(user_id,amount,details,status,created_at,currency_at_request,resolved_at) '
-                'VALUES(?,?,?,?,?,?,?)', uid, 3.5, SECRET, status, created, currency, None)
+                'VALUES(?,?,?,?,?,?,?)', uid, to_minor(3.5), SECRET, status, created, currency, None)
     return app.db.scalar('SELECT MAX(id) FROM withdrawals')
 
 
@@ -131,21 +132,21 @@ async def test_unknown_owner_action_not_rejection_and_resolution_once(tmp_path, 
     import child.db as mod
     app, feed = make(tmp_path, 'clicker', bot)
     app.db.upsert_user(A, None, 'fake', None)
-    app.db.add_balance(A, 100)
-    wid = app.db.create_withdrawal(A, 10, SECRET, currency='🪙')
+    app.db.add_balance(A, to_minor(100))
+    wid = app.db.create_withdrawal(A, to_minor(10), SECRET, currency='🪙')
     session.clear()
     await feed(cb_update(OWNER, f'wd:unknown:{wid}'))
-    assert app.db.withdrawal(wid)['status'] == 'pending' and app.db.user(A)['balance'] == 90
+    assert app.db.withdrawal(wid)['status'] == 'pending' and app.db.user(A)['balance'] == to_minor(90)
     monkeypatch.setattr(mod, 'now', lambda: 200)
     await feed(cb_update(OWNER, f'wd:no:{wid}'))
     assert app.db.withdrawal(wid)['resolved_at'] == 200
-    assert app.db.user(A)['balance'] == 100
+    assert app.db.user(A)['balance'] == to_minor(100)
     notices = [m for m in session.of(SendMessage) if m.chat_id == A]
     assert len(notices) == 1
     assert '200' not in notices[0].text  # same existing notification, not new metadata broadcast
     monkeypatch.setattr(mod, 'now', lambda: 300)
     await feed(cb_update(OWNER, f'wd:no:{wid}'))
-    assert app.db.withdrawal(wid)['resolved_at'] == 200 and app.db.user(A)['balance'] == 100
+    assert app.db.withdrawal(wid)['resolved_at'] == 200 and app.db.user(A)['balance'] == to_minor(100)
     assert len([m for m in session.of(SendMessage) if m.chat_id == A]) == 1
 
 
@@ -170,7 +171,7 @@ async def test_creation_captures_unit_at_insert_then_config_change_not_relabel(t
     app, feed = make(tmp_path, template, bot)
     app.set('min_withdraw', 1)
     await feed(msg_update(A, '/start'))
-    app.db.add_balance(A, 10)
+    app.db.add_balance(A, to_minor(10))
     await feed(msg_update(A, '💸 Вывод'))
     await feed(msg_update(A, '3'))
     app.set('currency', unit + '<new>')
@@ -302,14 +303,14 @@ async def test_unavailable_card_and_old_completed_callback_no_notifications(tmp_
 async def test_new_owner_can_resolve_old_queue_old_owner_keeps_own_rows(tmp_path, bot, session):
     app, feed = make(tmp_path, 'clicker', bot)
     await feed(msg_update(A, '/start'))
-    app.db.add_balance(A, 20)
-    wid = app.db.create_withdrawal(A, 3.5, SECRET, currency='🪙')
+    app.db.add_balance(A, to_minor(20))
+    wid = app.db.create_withdrawal(A, to_minor(3.5), SECRET, currency='🪙')
     own_id = seed(app, uid=OWNER)
     cfg = read_config(tmp_path)
     cfg['owner_id'] = B
     write_config(tmp_path, cfg)
     await feed(cb_update(B, f'wd:no:{wid}'))
-    assert app.db.withdrawal(wid)['status'] == 'rejected' and app.db.user(A)['balance'] == 20
+    assert app.db.withdrawal(wid)['status'] == 'rejected' and app.db.user(A)['balance'] == to_minor(20)
     await feed(cb_update(OWNER, 'wh:list:mine:0'))
     details = [b.callback_data for b in buttons(session) if b.callback_data.startswith('wh:detail:')]
     assert details == [f'wh:detail:mine:0:{own_id}']
@@ -348,7 +349,7 @@ async def test_empty_configured_unit_creation_notification_labels_not_unknown(tm
     app, feed = make(tmp_path, 'clicker', bot)
     app.set('min_withdraw', 1)
     await feed(msg_update(A, '/start'))
-    app.db.add_balance(A, 10)
+    app.db.add_balance(A, to_minor(10))
     await feed(msg_update(A, '💸 Вывод'))
     await feed(msg_update(A, '3'))
     app.set('currency', '')

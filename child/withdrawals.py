@@ -12,6 +12,7 @@ from sqlite3 import Row
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import Filter
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.core import ChildApp, admin_kb, safe_send, send_profile
@@ -64,6 +65,17 @@ def is_owner(app: ChildApp, uid: int) -> bool:
         return type(owner) is int and owner == uid
     except (OSError, ValueError):
         return False  # unreadable config is never permission to see payment details
+
+
+class LiveOwnerFilter(Filter):
+    """Re-read config.json on every event so a transfer takes effect immediately."""
+
+    def __init__(self, app: ChildApp):
+        self.app = app
+
+    async def __call__(self, event: Message | CallbackQuery) -> bool:
+        user = getattr(event, "from_user", None)
+        return bool(user) and is_owner(self.app, user.id)
 
 
 def number(value: str, *, page: bool = False) -> int:

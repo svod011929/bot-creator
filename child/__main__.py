@@ -14,7 +14,16 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from child.core import ChildApp, GateMiddleware, apply_bot_settings, build_admin_router, build_core_router, install_bot_commands
+from child.core import (
+    ChildApp,
+    GateMiddleware,
+    apply_bot_settings,
+    build_admin_router,
+    build_core_router,
+    install_bot_commands,
+    start_maintenance_tasks,
+    stop_maintenance_tasks,
+)
 from child.engagement import ObservationScope
 from child.payout_flow import build_payout_router
 from child.withdrawals import build_history_router
@@ -60,12 +69,14 @@ async def run(bot_dir: Path) -> int:
     dp = build_dispatcher(app)
     await install_bot_commands(bot, app)
     await apply_bot_settings(bot)
+    start_maintenance_tasks(app)
     logging.info("Бот @%s (шаблон %s) запущен", app.username, app.info.key)
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     except TelegramUnauthorizedError:
         return EXIT_BAD_TOKEN
     finally:
+        await stop_maintenance_tasks(app)
         await app.close_gates()
         await bot.session.close()
     return 0

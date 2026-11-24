@@ -20,7 +20,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 
 from child.__main__ import EXIT_BAD_TOKEN, build_dispatcher
-from child.core import ChildApp, apply_bot_settings, install_bot_commands
+from child.core import ChildApp, apply_bot_settings, install_bot_commands, start_maintenance_tasks, stop_maintenance_tasks
 
 log = logging.getLogger("worker")
 
@@ -92,6 +92,7 @@ class BotHost:
             dp = build_dispatcher(app)
             await install_bot_commands(bot, app)
             await apply_bot_settings(bot)
+            start_maintenance_tasks(app)
             _append_bot_log(Path(app.dir), f"Run polling for bot @{app.username}")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         except TelegramUnauthorizedError:
@@ -110,6 +111,10 @@ class BotHost:
                 self.slots.pop(bot_id, None)
 
     async def _close(self, app: ChildApp, bot: Bot) -> None:
+        try:
+            await stop_maintenance_tasks(app)
+        except Exception:  # noqa: BLE001
+            log.exception("stop maintenance")
         try:
             await app.close_gates()
         except Exception:  # noqa: BLE001

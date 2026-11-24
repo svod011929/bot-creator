@@ -2,6 +2,7 @@
 from aiogram.methods import AnswerCallbackQuery, SendMessage
 
 from child.files import read_config, write_config
+from child.money import to_minor
 from tests.conftest import cb_update, msg_update
 from tests.test_child_bots import OWNER, A, make
 
@@ -50,7 +51,7 @@ async def test_full_wizard_without_channel(tmp_path, bot, session):
     assert count(app) == 0
     await feed(cb_update(OWNER, "tsave"))
     row = app.db.one("SELECT title,url,channel,reward,active FROM tasks")
-    assert tuple(row) == ("<b>Канал</b>", "https://t.me/x", "", 1.5, 1)
+    assert tuple(row) == ("<b>Канал</b>", "https://t.me/x", "", to_minor(1.5), 1)
     await feed(cb_update(OWNER, "tsave"))  # stale: nothing more saved
     assert count(app) == 1 and "устарел" in session.of(AnswerCallbackQuery)[-1].text
 
@@ -64,7 +65,7 @@ async def test_channel_step_validation(tmp_path, bot, session):
     await feed(msg_update(OWNER, "@chan"))
     assert "@chan" in last(session).text
     await feed(cb_update(OWNER, "tsave"))
-    assert tuple(app.db.one("SELECT channel,reward FROM tasks")) == ("@chan", 2.0)
+    assert tuple(app.db.one("SELECT channel,reward FROM tasks")) == ("@chan", to_minor(2))
 
 
 async def test_cancel_paths_save_nothing(tmp_path, bot, session):
@@ -86,7 +87,7 @@ async def test_one_line_format_goes_to_preview(tmp_path, bot, session):
     await feed(msg_update(OWNER, "Подписка | https://t.me/x | 2 | @x"))
     assert "Проверьте задание" in last(session).text and count(app) == 0
     await feed(cb_update(OWNER, "tsave"))
-    assert tuple(app.db.one("SELECT title,url,channel,reward FROM tasks")) == ("Подписка", "https://t.me/x", "@x", 2.0)
+    assert tuple(app.db.one("SELECT title,url,channel,reward FROM tasks")) == ("Подписка", "https://t.me/x", "@x", to_minor(2))
 
 
 async def test_menu_button_cancels_wizard(tmp_path, bot, session):

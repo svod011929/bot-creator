@@ -19,6 +19,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.db import fmt
+from child.money import to_minor
 from child.star_journey import StarJourney
 from child.star_tracks import StarTracks
 from child.star_tracks_views import BTN_TRACKS, open_tracks
@@ -26,7 +27,7 @@ from child.star_tracks_views import build_router as tracks_router
 from child.star_views import BTN_JOURNEY, open_journey
 from child.star_views import build_router as journey_router
 from child.templates import Setting, TemplateInfo
-from child.withdrawals import is_owner
+from child.withdrawals import LiveOwnerFilter, is_owner
 
 INFO = TemplateInfo(
     key="starbot",
@@ -127,11 +128,14 @@ def check_url(text: str) -> str:
     return url
 
 
-def check_reward(text: str) -> float:
+def check_reward(text: str) -> int:
     reward = float((text or "").strip().replace(",", "."))
     if not math.isfinite(reward) or reward <= 0:
         raise ValueError("reward")
-    return reward
+    minor = to_minor(reward)
+    if minor <= 0:
+        raise ValueError("reward")
+    return minor
 
 
 def check_channel(text: str) -> str:
@@ -141,7 +145,7 @@ def check_channel(text: str) -> str:
     return channel
 
 
-def parse_task(text: str) -> tuple[str, str, float, str]:
+def parse_task(text: str) -> tuple[str, str, int, str]:
     """«Название | ссылка | награда | @канал(необязательно)»."""
     parts = [p.strip() for p in text.split("|")]
     if len(parts) < 3:
@@ -158,7 +162,7 @@ def build_router(app) -> Router:
         pause_forms(app, message.from_user.id)
         uid = message.from_user.id
         await message.answer(
-            f"⭐ Приглашайте друзей и получайте <b>{fmt(float(app.s['ref_reward']))} {app.currency}</b> за каждого!\n\n"
+            f"⭐ Приглашайте друзей и получайте <b>{fmt(to_minor(app.s['ref_reward']))} {app.currency}</b> за каждого!\n\n"
             f"Приглашено: {app.db.referrals(uid)}\n🔗 {app.ref_link(uid)}",
             disable_web_page_preview=True,
         )
@@ -175,8 +179,12 @@ def build_router(app) -> Router:
         if left > 0:
             await message.answer(f"⏳ Следующий бонус через {left // 3600} ч {left % 3600 // 60} мин.")
             return
-        amount = float(app.s["daily_bonus"])
-        if not math.isfinite(amount) or amount < 0:
+        try:
+            amount = to_minor(app.s["daily_bonus"])
+        except ValueError:
+            await message.answer("Начисление бонуса временно недоступно: владелец должен проверить настройки.")
+            return
+        if amount < 0:
             await message.answer("Начисление бонуса временно недоступно: владелец должен проверить настройки.")
             return
         cur = app.db.exec("UPDATE users SET last_daily=?, balance=balance+? WHERE id=? AND last_daily<=?",
@@ -264,8 +272,8 @@ def build_router(app) -> Router:
 
 def build_admin_router(app) -> Router:
     r = Router(name="starbot-admin")
-    r.message.filter(F.from_user.id == app.owner_id)
-    r.callback_query.filter(F.from_user.id == app.owner_id)
+    r.message.filter(LiveOwnerFilter(app))
+    r.callback_query.filter(LiveOwnerFilter(app))
 
     def tasks_kb() -> InlineKeyboardMarkup:
         rows = [[InlineKeyboardButton(text=f"🗑 {t['title'][:30]} ({fmt(t['reward'])})", callback_data=f"tdel:{t['id']}")]

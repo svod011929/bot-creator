@@ -252,7 +252,7 @@ class ClickerGame:
         with self.db.tx():
             self._ensure(uid, at)
             u = self.db.user(uid)
-            self.db.exec("UPDATE users SET balance=balance+?,clicks=clicks+1 WHERE id=?", base_reward * u["level"], uid)
+            self.db.add_balance(uid, base_reward * u["level"], clicks=1)
             self._record(uid, "taps", at)
             self._badges(uid, at)
             return self.db.user(uid)

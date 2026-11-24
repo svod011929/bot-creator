@@ -7,7 +7,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple
 
 from creator.money import STARS_TO_KOP
 
@@ -253,6 +253,14 @@ def now() -> int:
 def day_start(ts: int | None = None) -> int:
     t = time.localtime(ts or now())
     return int(time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1)))
+
+
+class ChargeOutcome(NamedTuple):
+    bot: sqlite3.Row
+    ok: bool
+    days: int
+    amount: int
+    left: int
 
 
 class DB:
@@ -812,29 +820,59 @@ class DB:
             self._change_balance(c, uid, -amount, "hosting", f"Хостинг бота ID {bot_id}")
             c.execute("UPDATE bots SET hosting_balance=hosting_balance+? WHERE id=?", (amount, bot_id))
 
-    def charge_due_bots(self, day_price: int, ts: int | None = None) -> list[tuple[sqlite3.Row, bool]]:
-        """Списывает суточную плату с запущенных ботов.
-        Возвращает список (бот, ok) — ok=False значит денег не хватило и бота надо остановить."""
+    HOSTING_CATCH_UP_DAYS = 30
+    HOSTING_DAY_SECONDS = 86400
+
+    def charge_due_bots(self, day_price: int, ts: int | None = None) -> list[ChargeOutcome]:
+        """Charge every missed hosting day in one pass, at most HOSTING_CATCH_UP_DAYS.
+
+        A period is charged at most once: next_charge_at advances by 86400 * days_charged.
+        ok=False means the bot could not pay the next due day and must be stopped.
+        A zero or negative day_price advances the calendar without taking money.
+        """
         ts = ts or now()
-        result: list[tuple[sqlite3.Row, bool]] = []
+        result: list[ChargeOutcome] = []
+        price = int(day_price)
         with self.tx() as c:
             rows = c.execute(
                 "SELECT * FROM bots WHERE deleted=0 AND desired=1 AND next_charge_at IS NOT NULL AND next_charge_at<=?",
                 (ts,),
             ).fetchall()
             for b in rows:
-                if b["hosting_balance"] >= day_price:
+                due = int(b["next_charge_at"])
+                days_owed = min(
+                    self.HOSTING_CATCH_UP_DAYS,
+                    max(0, (ts - due) // self.HOSTING_DAY_SECONDS + 1),
+                )
+                if days_owed <= 0:
+                    continue
+                balance = int(b["hosting_balance"])
+                if price <= 0:
+                    paid_days, amount, ok = days_owed, 0, True
+                else:
+                    affordable = min(days_owed, balance // price)
+                    paid_days, amount = affordable, affordable * price
+                    ok = affordable == days_owed
+                new_next = due + paid_days * self.HOSTING_DAY_SECONDS
+                left = balance - amount
+                if ok:
                     c.execute(
                         "UPDATE bots SET hosting_balance=hosting_balance-?, next_charge_at=? WHERE id=?",
-                        (day_price, max(b["next_charge_at"], ts - 86400) + 86400, b["id"]),
+                        (amount, new_next, b["id"]),
                     )
-                    result.append((b, True))
                 else:
-                    c.execute(
-                        "UPDATE bots SET desired=0, status='stopped', last_error='Закончился баланс хостинга' WHERE id=?",
-                        (b["id"],),
-                    )
-                    result.append((b, False))
+                    if paid_days > 0:
+                        c.execute(
+                            "UPDATE bots SET hosting_balance=hosting_balance-?, next_charge_at=?, "
+                            "desired=0, status='stopped', last_error='Закончился баланс хостинга' WHERE id=?",
+                            (amount, new_next, b["id"]),
+                        )
+                    else:
+                        c.execute(
+                            "UPDATE bots SET desired=0, status='stopped', last_error='Закончился баланс хостинга' WHERE id=?",
+                            (b["id"],),
+                        )
+                result.append(ChargeOutcome(bot=b, ok=ok, days=paid_days, amount=amount, left=left))
         return result
 
     @contextmanager
@@ -1091,12 +1129,13 @@ class DB:
         return int(row["bot_id"]) if row else None
 
     def idea_add(self, user_id: int, text: str) -> int:
-        cur = self.conn.execute(
-            "INSERT INTO ideas (user_id, text, created_at) VALUES (?, ?, ?)",
-            (user_id, text.strip()[:1000], now()),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
+        """Insert an idea in the same transactional helper used by voting."""
+        with self.tx() as c:
+            cur = c.execute(
+                "INSERT INTO ideas (user_id, text, created_at) VALUES (?, ?, ?)",
+                (user_id, text.strip()[:1000], now()),
+            )
+            return int(cur.lastrowid)
 
     def idea_list(self, limit: int = 10) -> list:
         return [dict(r) for r in self.conn.execute(
@@ -1123,12 +1162,18 @@ class DB:
         except sqlite3.IntegrityError:
             return False
 
-    def idea_set_status(self, idea_id: int, status: str, reward_kop: int = 0) -> None:
-        self.conn.execute(
-            "UPDATE ideas SET status=?, reward_kop=? WHERE id=?",
-            (status, reward_kop, idea_id),
-        )
-        self.conn.commit()
+    def idea_set_status(self, idea_id: int, status: str, reward_kop: int = 0) -> bool:
+        """Update idea status in the same transactional helper used by voting.
+
+        Returns True if a row was updated. This does not credit a reward;
+        accepted ideas with a payout go through idea_accept.
+        """
+        with self.tx() as c:
+            cur = c.execute(
+                "UPDATE ideas SET status=?, reward_kop=? WHERE id=?",
+                (status, reward_kop, idea_id),
+            )
+            return cur.rowcount == 1
 
     def idea_accept(self, idea_id: int, reward_kop: int) -> dict | None:
         """Accept a new idea once and credit the author. None if already processed."""

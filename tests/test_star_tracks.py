@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from child.db import ChildDB
+from child.money import to_minor
 from child.star_journey import TZ, StarJourney, period
 from child.star_tracks import GRACE, StarTracks, TrackError
 from tests.test_clicker_events import snapshot
@@ -72,7 +73,7 @@ def test_seed_is_hidden_draft_and_initialization_never_backfills_players(env):
 
 def test_track_and_badge_never_credit_cash_sparks_or_daily_metrics(env):
     w = env
-    w.db.add_balance(A, 17.5)
+    w.db.add_balance(A, to_minor(17.5))
     before = {
         name: rows for name, rows in snapshot(w.db).items() if not name.startswith("star_track") and name != "sqlite_sequence"
     }

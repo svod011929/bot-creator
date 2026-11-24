@@ -2,6 +2,7 @@ import pytest
 
 from child import templates
 from child.files import human_size, read_settings, write_config, write_setting
+from child.money import to_minor
 from child.templates.starbot import parse_task
 
 
@@ -39,8 +40,8 @@ def test_settings_files(tmp_path):
 
 
 def test_parse_task():
-    assert parse_task("Канал | https://t.me/x | 0,5 | @x") == ("Канал", "https://t.me/x", 0.5, "@x")
-    assert parse_task("Сайт | https://a.b | 2") == ("Сайт", "https://a.b", 2.0, "")
+    assert parse_task("Канал | https://t.me/x | 0,5 | @x") == ("Канал", "https://t.me/x", to_minor(0.5), "@x")
+    assert parse_task("Сайт | https://a.b | 2") == ("Сайт", "https://a.b", to_minor(2), "")
     for bad in ("a | b", "a | ftp://x | 1", "a | https://x | 0", "a | https://x | 1 | chan"):
         with pytest.raises(ValueError):
             parse_task(bad)

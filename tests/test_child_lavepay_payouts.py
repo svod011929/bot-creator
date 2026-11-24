@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 
 from child.db import ChildDB
 from child.files import read_config, write_config, write_setting
+from child.money import to_minor
 from child.payouts import normalize_trc20, parse_idempotency_key, payouts_ready
 from creator.child_payouts import ChildPayoutService
 from creator.config import Config, load_config
@@ -439,7 +440,7 @@ async def test_child_flow_collects_trc20_and_waits_for_constructor(tmp_path, bot
 
     assert payouts_ready(app)
     await feed(msg_update(A, "/start"))
-    app.db.add_balance(A, 1000)
+    app.db.add_balance(A, to_minor(1000))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, "100"))
     last = session.texts()[-1]
@@ -454,7 +455,7 @@ async def test_child_flow_collects_trc20_and_waits_for_constructor(tmp_path, bot
     assert constructor_link(app, w["id"]).endswith(f"lpayout_7_{w['id']}")
     action, _ = owner_resolve(app, rows[0]["id"], False)
     assert action == "manual_rejected"
-    assert app.db.user(A)["balance"] == 1000
+    assert app.db.user(A)["balance"] == to_minor(1000)
 
 
 @pytest.mark.asyncio
@@ -463,7 +464,7 @@ async def test_clicker_without_flag_stays_manual(tmp_path, bot, session):
     write_config(tmp_path, {**read_config(tmp_path), "bot_id": 7, "lavepay_payouts_enabled": False})
     app.cfg = read_config(tmp_path)
     await feed(msg_update(A, "/start"))
-    app.db.add_balance(A, 20000)
+    app.db.add_balance(A, to_minor(20000))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, "10000"))
     last = session.texts()[-1]

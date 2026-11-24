@@ -8,6 +8,7 @@ from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import Update
 
 from child.files import write_config
+from child.money import to_minor
 from child.referral_club import SEED
 from child.subscription import GateResult
 from tests.conftest import cb_update, msg_update
@@ -44,7 +45,7 @@ async def test_complete_club_session_preserves_legacy_cash_reward(tmp_path, bot,
     await feed(cb_update(A, "club:link:1"))
     token = re.search(r"start=(c_[A-Za-z0-9_-]+)", last_screen(session).text).group(1)
     await feed(msg_update(B, "/start " + token))
-    assert app.db.user(A)["balance"] == 5
+    assert app.db.user(A)["balance"] == to_minor(5)
     assert app.club.summary(A)["qualified"] == 0
     await onboard(feed, session, B)
     await feed(cb_update(B, "club:quiz:1"))
@@ -59,7 +60,7 @@ async def test_complete_club_session_preserves_legacy_cash_reward(tmp_path, bot,
     assert "✅ Засчитан" in last_screen(session).text
     await feed(msg_update(A, "👤 Профиль"))
     assert "Клубные баллы: 45" in last_screen(session).text
-    assert app.db.user(A)["balance"] == 5
+    assert app.db.user(A)["balance"] == to_minor(5)
     app.db.conn.close()
 
 
@@ -208,13 +209,13 @@ async def test_unknown_subscription_does_not_qualify_campaign(tmp_path, bot, ses
 async def test_opening_club_leaves_withdrawal_flow_without_spending_points(tmp_path, bot, session):
     app, feed, clock = await setup(tmp_path, bot)
     await onboard(feed, session, A)
-    app.db.add_balance(A, 200)
+    app.db.add_balance(A, to_minor(200))
     await feed(msg_update(A, "💸 Вывод"))
     await feed(msg_update(A, "🚀 Клуб"))
     assert "Статус:" in last_screen(session).text
     await feed(msg_update(A, "150"))
     assert app.db.scalar("SELECT COUNT(*) FROM withdrawals") == 0
-    assert app.db.user(A)["balance"] == 200
+    assert app.db.user(A)["balance"] == to_minor(200)
     assert app.club.summary(A)["member"]["points"] == 20
     app.db.conn.close()
 

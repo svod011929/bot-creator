@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from child.db import fmt
+from child.money import to_minor
 from child.referral_club import ReferralClub
 from child.referral_teams import ReferralTeams
 from child.referral_teams_views import BTN_TEAMS
@@ -109,7 +110,7 @@ def build_router(app) -> Router:
         pause_forms(app, message.from_user.id)
         uid = message.from_user.id
         await message.answer(
-            f"👥 За каждого друга — <b>{fmt(float(app.s['ref_reward']))} {app.currency}</b>\n\n"
+            f"👥 За каждого друга — <b>{fmt(to_minor(app.s['ref_reward']))} {app.currency}</b>\n\n"
             f"Вы пригласили: {app.db.referrals(uid)}\n🔗 Ваша ссылка:\n{app.ref_link(uid)}\n\n"
             "Для целей, заданий и клубных баллов откройте «🚀 Клуб» и создайте отдельную ссылку кампании.",
             disable_web_page_preview=True,
