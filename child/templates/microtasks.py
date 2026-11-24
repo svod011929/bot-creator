@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from child.db import fmt, now
-from child.mgram_proxy import check_completion, fetch_pending
+from child.mgram_proxy import check_completion, fetch_pending_result
 from child.templates import Setting, TemplateInfo
 from child.withdrawals import is_owner
 
@@ -112,6 +112,27 @@ def _mgram_bot_id(app) -> int:
     return int(app.cfg.get("bot_id") or 0)
 
 
+_MGRAM_HINTS = {
+    "not_configured": (
+        "Задания MGRAM пока недоступны: у конструктора ещё нет ключа хаб-бота. "
+        "После перезапуска он пробует получить ключ сам, либо его можно вставить "
+        "в «Ключи интеграций»."
+    ),
+    "no_proxy": (
+        "Задания MGRAM пока недоступны: нет связи с конструктором. "
+        "Перезапустите этого бота из конструктора."
+    ),
+    "error": "Задания MGRAM пока недоступны: сервис не ответил. Попробуйте позже.",
+    "empty": "Задания MGRAM пока недоступны: сервис вернул пустой ответ. Попробуйте позже.",
+    "timeout": "Задания MGRAM пока недоступны: истекло время ожидания. Попробуйте позже.",
+    "refused": "Задания MGRAM пока недоступны. Перезапустите этого бота из конструктора.",
+}
+
+
+def _mgram_owner_hint(reason: str) -> str:
+    return _MGRAM_HINTS.get(reason, "")
+
+
 def _proof_types_label(types: list[str]) -> str:
     return ", ".join(_PROOF_LABELS.get(t, t) for t in types) or "—"
 
@@ -157,7 +178,17 @@ def build_router(app) -> Router:
             done = {r["task_id"] for r in app.db.all(
                 "SELECT task_id FROM micro_mgram_done WHERE user_id=?", uid
             )}
-            for task in await fetch_pending(app.cfg, _mgram_bot_id(app), uid):
+            listing = await fetch_pending_result(app.cfg, _mgram_bot_id(app), uid)
+            if listing.reason != "ok":
+                logging.getLogger("child.mgram").info(
+                    "mgram tasks skipped bot=%s user=%s reason=%s",
+                    _mgram_bot_id(app), uid, listing.reason,
+                )
+                if is_owner(app, uid):
+                    hint = _mgram_owner_hint(listing.reason)
+                    if hint:
+                        lines.append(hint)
+            for task in listing.tasks:
                 tid = task.get("id")
                 if not tid or tid in done:
                     continue
@@ -171,7 +202,10 @@ def build_router(app) -> Router:
                     callback_data=f"mt:mgram:{tid}",
                 )])
         if not available and not kb:
-            await message.answer("Сейчас нет доступных заданий (или достигнут лимит заявок).")
+            extra = ""
+            if _mgram_enabled(app) and is_owner(app, uid) and len(lines) > 1:
+                extra = "\n\n" + "\n".join(lines[1:])
+            await message.answer("Сейчас нет доступных заданий (или достигнут лимит заявок)." + extra)
             return
         if not lines[1:]:
             lines.append("Нет доступных заданий.")
@@ -252,8 +286,13 @@ def build_router(app) -> Router:
         except ValueError:
             await cb.answer("Неверная кнопка", show_alert=True)
             return
-        tasks = await fetch_pending(app.cfg, _mgram_bot_id(app), cb.from_user.id)
-        task = next((item for item in tasks if item.get("id") == tid), None)
+        listing = await fetch_pending_result(app.cfg, _mgram_bot_id(app), cb.from_user.id)
+        if listing.reason != "ok":
+            logging.getLogger("child.mgram").info(
+                "mgram task view skipped bot=%s user=%s reason=%s",
+                _mgram_bot_id(app), cb.from_user.id, listing.reason,
+            )
+        task = next((item for item in listing.tasks if item.get("id") == tid), None)
         if not task:
             await cb.answer("Задание недоступно или уже выполнено", show_alert=True)
             return
