@@ -27,6 +27,9 @@
 
 Живой конструктор: [@DDDCReatorBot](https://t.me/DDDCReatorBot). Автор: [KodoDrive](https://github.com/svod011929) · [Telegram](https://t.me/DDDDEVELOPER)
 
+> **Для ИИ / For AI:** сначала прочитайте [`AI_RULES.md`](./AI_RULES.md). Если проверяете проект на ошибки и оптимизируете его, затем откройте [`AI_AUDIT_TASK.md`](./AI_AUDIT_TASK.md). Работайте только с этим снимком, не со старыми архивами. Возвращайте diff или только изменённые файлы и не удаляйте тесты.
+
+
 <div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
@@ -51,6 +54,8 @@
 - [Тесты](#-тесты)
 - [Деплой](#-деплой)
 - [Автор](#-автор)
+- [Правила для ИИ](./AI_RULES.md)
+- [Задание на проверку](./AI_AUDIT_TASK.md)
 - [Проекты KodoDrive](#проекты-kododrive)
 
 ## ✨ Возможности
