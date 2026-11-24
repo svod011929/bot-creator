@@ -23,3 +23,5 @@ def test_enabled():
 def test_partner_key_is_not_given_to_child_processes():
     assert "MGRAM_PARTNER_API_KEY" not in CHILD_ENV_KEYS
     assert "MGRAM_PARTNER_API_KEY" not in {k.upper() for k in CHILD_ENV_KEYS}
+    assert "MGRAM_HUB_API_KEY" not in CHILD_ENV_KEYS
+    assert "MGRAM_HUB_API_KEY" not in {k.upper() for k in CHILD_ENV_KEYS}

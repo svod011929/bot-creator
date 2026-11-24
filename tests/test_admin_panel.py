@@ -7,8 +7,7 @@ from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from tests.conftest import cb_update, msg_update
 from tests.test_creator_flow import ADMIN, OWNER, env  # noqa: F401
 
-MENU = ["🔨 Создать бота", "🤖 Мои боты", "💼 Мой кабинет", "👥 Партнёры", "🛒 Перепродажа", "📰 Информация",
-        "📚 Контент ботов"]
+MENU = ["🔨 Создать бота", "🤖 Мои боты", "💼 Мой кабинет", "👥 Партнёры", "🛒 Перепродажа", "📰 Информация"]
 ADMIN_BTN = "🛠 Админ-панель"
 
 

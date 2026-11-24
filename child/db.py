@@ -219,6 +219,35 @@ class ChildDB:
                 self.add_balance(u["referrer_id"], reward)
             return u["referrer_id"]
 
+    def remember_mgram_shown(self, uid: int, task_id: int, reward: float) -> None:
+        """Store the reward shown to the user; overwritten if the same task is shown again."""
+        if not math.isfinite(reward) or reward < 0:
+            raise ValueError("Invalid reward")
+        with self.lock:
+            self.exec(
+                "INSERT INTO micro_mgram_shown(user_id, task_id, reward, shown_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id, task_id) DO UPDATE SET reward=excluded.reward, shown_at=excluded.shown_at",
+                uid, task_id, reward, now(),
+            )
+
+    def credit_mgram_task(self, uid: int, task_id: int, reward: float) -> float | None:
+        """Atomically credit a confirmed MGRAM task once. Returns the credited amount, or None if already done."""
+        if not math.isfinite(reward) or reward < 0:
+            raise ValueError("Invalid reward")
+        with self.tx():
+            if not self.user(uid):
+                return None
+            cur = self.exec(
+                "INSERT INTO micro_mgram_done(user_id, task_id, reward, created_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id, task_id) DO NOTHING",
+                uid, task_id, reward, now(),
+            )
+            if not cur.rowcount:
+                return None
+            if reward > 0:
+                self.add_balance(uid, reward)
+            return reward
+
     def complete_task(self, uid: int, tid: int, *, expected: tuple) -> float | None:
         """Credit once, only if the checked task is still active and unchanged."""
         with self.tx():
@@ -299,6 +328,24 @@ class ChildDB:
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS ix_micro_sub_user_status ON micro_submissions(user_id, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS ix_micro_sub_status ON micro_submissions(status, created_at)")
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS micro_mgram_shown (
+                    user_id INTEGER NOT NULL,
+                    task_id INTEGER NOT NULL,
+                    reward REAL NOT NULL,
+                    shown_at INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, task_id)
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS micro_mgram_done (
+                    user_id INTEGER NOT NULL,
+                    task_id INTEGER NOT NULL,
+                    reward REAL NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, task_id)
+                )
+            """)
             self.conn.execute("COMMIT")
         except BaseException:
             self.conn.execute("ROLLBACK")
