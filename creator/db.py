@@ -1109,13 +1109,16 @@ class DB:
         return dict(row) if row else None
 
     def idea_vote(self, idea_id: int, user_id: int) -> bool:
+        """Record one vote per user. Rolls back if the idea is missing so the unique vote is not stuck."""
         try:
-            self.conn.execute(
-                "INSERT INTO idea_votes (idea_id, user_id) VALUES (?, ?)",
-                (idea_id, user_id),
-            )
-            self.conn.execute("UPDATE ideas SET votes = votes + 1 WHERE id=?", (idea_id,))
-            self.conn.commit()
+            with self.tx() as c:
+                c.execute(
+                    "INSERT INTO idea_votes (idea_id, user_id) VALUES (?, ?)",
+                    (idea_id, user_id),
+                )
+                cur = c.execute("UPDATE ideas SET votes = votes + 1 WHERE id=?", (idea_id,))
+                if cur.rowcount != 1:
+                    raise sqlite3.IntegrityError("idea missing")
             return True
         except sqlite3.IntegrityError:
             return False

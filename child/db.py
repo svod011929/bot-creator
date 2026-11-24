@@ -248,6 +248,47 @@ class ChildDB:
                 self.add_balance(uid, reward)
             return reward
 
+    def approve_micro_submission(self, sid: int) -> float | None:
+        """Approve a pending microtask submission once and credit the reward.
+
+        Returns the credited amount (may be 0), or None if the submission was
+        already processed, is missing, or has a non-finite/negative reward.
+        """
+        with self.tx():
+            sub = self.one(
+                "SELECT s.user_id, s.status, t.reward FROM micro_submissions s "
+                "JOIN micro_tasks t ON t.id=s.task_id WHERE s.id=? AND s.status='pending'",
+                sid,
+            )
+            if not sub or not self.user(sub["user_id"]):
+                return None
+            try:
+                reward = float(sub["reward"])
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(reward) or reward < 0:
+                return None
+            cur = self.exec(
+                "UPDATE micro_submissions SET status='approved', decided_at=? "
+                "WHERE id=? AND status='pending'",
+                now(), sid,
+            )
+            if cur.rowcount != 1:
+                return None
+            if reward > 0:
+                self.add_balance(sub["user_id"], reward)
+            return reward
+
+    def reject_micro_submission(self, sid: int, comment: str = "") -> bool:
+        """Reject a pending microtask submission once. False if already processed."""
+        with self.tx():
+            cur = self.exec(
+                "UPDATE micro_submissions SET status='rejected', comment=?, decided_at=? "
+                "WHERE id=? AND status='pending'",
+                (comment or "")[:500], now(), sid,
+            )
+            return cur.rowcount == 1
+
     def complete_task(self, uid: int, tid: int, *, expected: tuple) -> float | None:
         """Credit once, only if the checked task is still active and unchanged."""
         with self.tx():
