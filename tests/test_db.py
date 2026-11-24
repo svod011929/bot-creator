@@ -169,3 +169,17 @@ def test_fresh_db_marked_rub(tmp_path):
     assert d.kv_get("currency") == "rub"
     assert "amount" in d._columns("lave_invoices") and "reward_kop" in d._columns("tgrass_ops")
     d.close()
+
+
+def test_idea_vote_once_and_missing_idea_does_not_stick(db):
+    db.upsert_user(1, "a", "A")
+    iid = db.idea_add(1, "Сделать экспорт статистики")
+    assert db.idea_vote(iid, 1) is True
+    assert db.idea_get(iid)["votes"] == 1
+    assert db.idea_vote(iid, 1) is False
+    assert db.idea_get(iid)["votes"] == 1
+    assert db.idea_vote(iid, 2) is True
+    assert db.idea_get(iid)["votes"] == 2
+    assert db.idea_vote(999, 1) is False
+    assert db.one("SELECT 1 FROM idea_votes WHERE idea_id=999") is None
+    assert db.idea_get(iid)["votes"] == 2

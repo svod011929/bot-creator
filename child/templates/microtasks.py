@@ -133,6 +133,60 @@ def _mgram_owner_hint(reason: str) -> str:
     return _MGRAM_HINTS.get(reason, "")
 
 
+def _callback_int(data: str, *, prefix: str) -> int | None:
+    """Parse a non-negative callback id/page. Rejects junk that would crash int()."""
+    raw = data[len(prefix):] if data.startswith(prefix) else ""
+    if not raw.isascii() or not raw.isdigit() or len(raw) > 18:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _proof_types(task) -> list[str]:
+    try:
+        types = json.loads(task["proof_types"] or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(types, list):
+        return []
+    return [t for t in types if isinstance(t, str)]
+
+
+def _submit_proof(app, uid: int, tid: int, proof: str) -> tuple[str | None, str, float | None]:
+    """Insert a submission and, for auto-approve, credit in the same transaction.
+
+    Returns (status, reason, reward). status is None when the user cannot submit.
+    """
+    with app.db.tx():
+        task = app.db.one("SELECT * FROM micro_tasks WHERE id=? AND is_active=1", tid)
+        if not task or not app.db.user(uid):
+            return None, "Задание больше недоступно.", None
+        ok, reason = _can_do_task(app, uid, task)
+        if not ok:
+            return None, reason, None
+        status = "approved" if task["approval_mode"] == "auto" else "pending"
+        reward = task["reward"]
+        if status == "approved" and (not math.isfinite(reward) or reward < 0):
+            return None, "Задание больше недоступно.", None
+        ts = now()
+        if status == "approved":
+            app.db.exec(
+                "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at, decided_at) "
+                "VALUES(?,?,?,?,?,?)",
+                uid, tid, proof, status, ts, ts,
+            )
+            if reward > 0:
+                app.db.add_balance(uid, reward)
+        else:
+            app.db.exec(
+                "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES(?,?,?,?,?)",
+                uid, tid, proof, status, ts,
+            )
+        return status, "", reward if status == "approved" else None
+
+
 def _proof_types_label(types: list[str]) -> str:
     return ", ".join(_PROOF_LABELS.get(t, t) for t in types) or "—"
 
@@ -168,7 +222,7 @@ def build_router(app) -> Router:
         lines = ["📋 <b>Доступные задания</b>\n"]
         kb = []
         for t in available:
-            types = json.loads(t["proof_types"] or "[]")
+            types = _proof_types(t)
             lines.append(
                 f"• {html.escape(t['title'])} — {fmt(t['reward'])} {app.s['currency']}"
                 f" ({_proof_types_label(types)})"
@@ -213,7 +267,10 @@ def build_router(app) -> Router:
 
     @r.callback_query(F.data.startswith("mt:do:"))
     async def start_do(cb: CallbackQuery, state: FSMContext) -> None:
-        tid = int(cb.data.split(":")[-1])
+        tid = _callback_int(cb.data, prefix="mt:do:")
+        if tid is None:
+            await cb.answer("Задание недоступно", show_alert=True)
+            return
         task = app.db.one("SELECT * FROM micro_tasks WHERE id=? AND is_active=1", tid)
         if not task:
             await cb.answer("Задание недоступно", show_alert=True)
@@ -224,7 +281,7 @@ def build_router(app) -> Router:
             return
         await state.set_state(SubmitProof.waiting)
         await state.update_data(task_id=tid)
-        types = json.loads(task["proof_types"] or "[]")
+        types = _proof_types(task)
         await cb.message.answer(
             f"Задание: <b>{html.escape(task['title'])}</b>\n"
             f"Награда: {fmt(task['reward'])} {app.s['currency']}\n"
@@ -250,20 +307,19 @@ def build_router(app) -> Router:
             await state.clear()
             await message.answer(reason)
             return
-        types = json.loads(task["proof_types"] or "[]")
+        types = _proof_types(task)
         proof = _validate_proof(message, types)
         if not proof:
             await message.answer(f"Нужно доказательство одного из типов: {_proof_types_label(types)}")
             return
         uid = message.from_user.id
-        status = "approved" if task["approval_mode"] == "auto" else "pending"
-        app.db.exec(
-            "INSERT INTO micro_submissions(user_id, task_id, proof, status, created_at) VALUES(?,?,?,?,?)",
-            uid, tid, proof, status, now()
-        )
+        status, reason, reward = _submit_proof(app, uid, tid, proof)
+        await state.clear()
+        if status is None:
+            await message.answer(reason)
+            return
         if status == "approved":
-            app.db.add_balance(uid, task["reward"])
-            await message.answer(f"Задание выполнено! Начислено {fmt(task['reward'])} {app.s['currency']}.")
+            await message.answer(f"Задание выполнено! Начислено {fmt(reward)} {app.s['currency']}.")
         else:
             await message.answer("Заявка отправлена на проверку.")
             # Уведомление владельцу
@@ -274,7 +330,6 @@ def build_router(app) -> Router:
                 )
             except Exception:
                 pass
-        await state.clear()
 
     @r.callback_query(F.data.startswith("mt:mgram:"))
     async def mgram_show(cb: CallbackQuery) -> None:
@@ -394,7 +449,9 @@ def build_router(app) -> Router:
 
 
 def build_admin_router(app) -> Router:
-    r = Router()
+    r = Router(name="microtasks-admin")
+    r.message.filter(F.from_user.id == app.owner_id)
+    r.callback_query.filter(F.from_user.id == app.owner_id)
 
     def tasks_kb():
         rows = app.db.all("SELECT id, title, is_active FROM micro_tasks ORDER BY id DESC LIMIT 30")
@@ -415,6 +472,7 @@ def build_admin_router(app) -> Router:
     @r.callback_query(F.data == "mt:create")
     async def start_create(cb: CallbackQuery, state: FSMContext) -> None:
         if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
             return
         await state.set_state(TaskCreate.title)
         await cb.message.answer("Название задания:")
@@ -518,7 +576,13 @@ def build_admin_router(app) -> Router:
 
     @r.callback_query(F.data == "mt:save", StateFilter(TaskCreate.preview))
     async def save_task(cb: CallbackQuery, state: FSMContext) -> None:
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
         data = await state.get_data()
+        if not {"title", "reward", "proof_types", "approval_mode", "repeat_mode"} <= set(data):
+            await cb.answer("Черновик устарел — начните заново.", show_alert=True)
+            return
         app.db.exec(
             """INSERT INTO micro_tasks
                (title, description, reward, proof_types, approval_mode, repeat_mode, cooldown_hours, is_active, created_at)
@@ -533,13 +597,22 @@ def build_admin_router(app) -> Router:
 
     @r.callback_query(F.data == "mt:cancel")
     async def cancel_create(cb: CallbackQuery, state: FSMContext) -> None:
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
         await state.clear()
         await cb.message.answer("Создание отменено.")
         await cb.answer()
 
     @r.callback_query(F.data.startswith("mt:toggle:"))
     async def toggle(cb: CallbackQuery) -> None:
-        tid = int(cb.data.split(":")[-1])
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        tid = _callback_int(cb.data, prefix="mt:toggle:")
+        if tid is None:
+            await cb.answer("Задание недоступно", show_alert=True)
+            return
         app.db.exec("UPDATE micro_tasks SET is_active = 1 - is_active WHERE id=?", tid)
         await cb.message.edit_reply_markup(reply_markup=tasks_kb())
         await cb.answer()
@@ -558,7 +631,10 @@ def build_admin_router(app) -> Router:
                 "WHERE status='pending' AND created_at < ?",
                 now(), cutoff
             )
-        page = int(cb.data.split(":")[-1])
+        page = _callback_int(cb.data, prefix="mt:admin:queue:")
+        if page is None:
+            await cb.answer("Очередь недоступна", show_alert=True)
+            return
         rows = app.db.all(
             "SELECT s.*, t.title, u.full_name FROM micro_submissions s "
             "JOIN micro_tasks t ON t.id=s.task_id "
@@ -588,23 +664,29 @@ def build_admin_router(app) -> Router:
 
     @r.callback_query(F.data.startswith("mt:ok:"))
     async def approve(cb: CallbackQuery) -> None:
-        sid = int(cb.data.split(":")[-1])
-        sub = app.db.one(
-            "SELECT s.*, t.reward FROM micro_submissions s "
-            "JOIN micro_tasks t ON t.id=s.task_id WHERE s.id=? AND s.status='pending'",
-            sid
-        )
-        if not sub:
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        sid = _callback_int(cb.data, prefix="mt:ok:")
+        if sid is None:
             await cb.answer("Уже обработано", show_alert=True)
             return
-        app.db.exec("UPDATE micro_submissions SET status='approved', decided_at=? WHERE id=?", now(), sid)
-        app.db.add_balance(sub["user_id"], sub["reward"])
-        await cb.message.edit_text(cb.message.text + "\n\n✅ Одобрено")
+        reward = app.db.approve_micro_submission(sid)
+        if reward is None:
+            await cb.answer("Уже обработано", show_alert=True)
+            return
+        await cb.message.edit_text((cb.message.text or "") + "\n\n✅ Одобрено")
         await cb.answer("Одобрено")
 
     @r.callback_query(F.data.startswith("mt:no:"))
     async def reject_start(cb: CallbackQuery, state: FSMContext) -> None:
-        sid = int(cb.data.split(":")[-1])
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        sid = _callback_int(cb.data, prefix="mt:no:")
+        if sid is None:
+            await cb.answer("Уже обработано", show_alert=True)
+            return
         await state.update_data(reject_id=sid)
         await state.set_state("mt_reject_comment")
         await cb.message.answer("Комментарий к отклонению (или - чтобы без комментария):")
@@ -612,14 +694,15 @@ def build_admin_router(app) -> Router:
 
     @r.message(StateFilter("mt_reject_comment"))
     async def reject_finish(message: Message, state: FSMContext) -> None:
+        if not is_owner(app, message.from_user.id):
+            await state.clear()
+            await message.answer("Нет доступа")
+            return
         data = await state.get_data()
         sid = data.get("reject_id")
         comment = "" if message.text == "-" else (message.text or "")[:500]
-        app.db.exec(
-            "UPDATE micro_submissions SET status='rejected', comment=?, decided_at=? WHERE id=? AND status='pending'",
-            comment, now(), sid
-        )
+        ok = bool(sid) and app.db.reject_micro_submission(int(sid), comment)
         await state.clear()
-        await message.answer("Заявка отклонена.")
+        await message.answer("Заявка отклонена." if ok else "Уже обработано.")
 
     return r
