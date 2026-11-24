@@ -17,7 +17,8 @@ MIN_USERS = 50
 
 
 def _factory(ctx: Ctx) -> MgramFactory | None:
-    key = getattr(ctx.cfg, "mgram_partner_api_key", "")
+    from creator.integration_keys import value
+    key = value(ctx.cfg, "mgram_partner")
     return MgramFactory(key) if key else None
 
 

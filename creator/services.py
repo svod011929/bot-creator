@@ -49,6 +49,7 @@ class Ctx:
     unsub: Any = None  # creator.unsubscribe_webhooks.UnsubscribeService
 
     source_inputs: dict = field(default_factory=dict, repr=False)  # expiring candidate secrets, never FSM/DB
+    key_inputs: dict = field(default_factory=dict, repr=False)  # integration-key candidates, never FSM/DB
     subscription_checks: dict = field(default_factory=dict)
     bot_lists: dict = field(default_factory=dict)  # bounded ephemeral owner list views, no bot rows/credentials
     _runtime_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -124,6 +125,12 @@ class Ctx:
 
     def is_admin(self, uid: int) -> bool:
         return uid in self.cfg.admin_ids
+
+    def discard_pending_secrets(self, uid: int) -> None:
+        """Drop expiring in-memory candidate secrets. Never log the values."""
+        self.source_inputs.pop(uid, None)
+        self.key_inputs.pop(uid, None)
+
 
     # ---------- операции ----------
     async def create_bot(self, draft_id: int) -> int | None:

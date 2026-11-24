@@ -81,8 +81,10 @@ async def run() -> None:
     webhook_runner = None
     unsub_runner = None
     mgram_proxy_runner = None
-    if cfg.lavepay_enabled:
-        lave_client = LavePayClient(cfg.lavepay_api_key, cfg.lavepay_base_url)
+    from creator.integration_keys import value
+    lave_key = value(cfg, "lavepay")
+    if lave_key:
+        lave_client = LavePayClient(lave_key, cfg.lavepay_base_url)
         ctx.lave = LavePayService(ctx, lave_client, notify=notify, webhook_secret=cfg.lavepay_webhook_secret)
         try:
             m = await lave_client.me()

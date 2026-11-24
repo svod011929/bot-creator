@@ -369,7 +369,7 @@ async def test_admin_panel_has_submenus_with_all_buttons(env):  # noqa: F811
     needed = ("a:users", "a:bots", "a:botfind", "a:bc", "a:bcb", "a:news",
               "a:prices", "a:lave:0", "a:alog:0", "src:home", "a:ideas",
               "a:restartall",
-              "a:set:gate", "a:set:reward", "a:set:contacts")
+              "a:set:gate", "a:set:reward", "a:set:contacts", "ik:home")
     for need in needed:
         assert need in inner
     await feed(msg_update(ADMIN, "/admin"))
