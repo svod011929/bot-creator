@@ -114,6 +114,10 @@ async def test_mgram_register_shows_access_key_once_and_does_not_store_it(env, m
     assert row["api_key_shown"] == 1
     assert "once-only-access-key" not in str(row)
     assert "api_key" not in row or row.get("api_key") in (None, "", 0, 1)
+    from creator.integration_keys import value
+    assert value(ctx.cfg, "mgram_hub") == ""
+    assert not (ctx.cfg.data_dir / "mgram_hub.json").exists()
+    assert not (ctx.cfg.data_dir / "integration_keys" / "mgram_hub.json").exists()
 
 
 @pytest.mark.asyncio

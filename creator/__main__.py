@@ -111,7 +111,14 @@ async def run() -> None:
            notify_owner_strict=notify_strict)
     if cfg.webhook_listen_port:
         unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
+    from creator.mgram_hub import ensure_hub_key
     from creator.mgram_tasks import start_proxy, stop_proxy
+    hub_status = await ensure_hub_key(
+        cfg,
+        bot_token=cfg.bot_token,
+        owner_id=cfg.approver or (next(iter(cfg.admin_ids), 0) if cfg.admin_ids else 0),
+    )
+    log.info("MGRAM hub ensure: %s", hub_status)
     mgram_proxy_runner = await start_proxy(cfg, db)
     from creator.integrations import ensure_services, wait_and_sync
     ensure_services(ctx)
