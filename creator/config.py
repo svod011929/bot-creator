@@ -135,11 +135,13 @@ class Config:
 
     @property
     def lavepay_enabled(self) -> bool:
-        return bool(self.lavepay_api_key)
+        from creator.integration_keys import value
+        return bool(value(self, "lavepay"))
 
     @property
     def mgram_enabled(self) -> bool:
-        return bool(self.mgram_partner_api_key)
+        from creator.integration_keys import value
+        return bool(value(self, "mgram_partner"))
 
     @property
     def db_path(self) -> Path:

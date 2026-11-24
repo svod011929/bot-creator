@@ -133,6 +133,11 @@ def read_child_done(bot_dir: Path, after_id: int, limit: int = 500) -> list[tupl
         return []
 
 
+
+def _factory_token(cfg) -> str:
+    from creator.integration_keys import value
+    return value(cfg, "tgrass_factory")
+
 class TGrassService:
     def __init__(self, ctx: "Ctx", client: TGrassClient, notify: Notify | None = None):
         self.ctx = ctx
@@ -188,7 +193,7 @@ class TGrassService:
                 source = store.resolve()
                 if source.key:
                     return source.key
-                if not self.ctx.cfg.tgrass_factory_token or not self.ctx.cfg.tgrass_owner_id:
+                if not _factory_token(self.ctx.cfg) or not self.ctx.cfg.tgrass_owner_id:
                     raise TGrassError("Нет ключа источника или данных для регистрации хаба")
                 name = (self.ctx.bot_username or "creator_hub").lstrip("@")
                 key = await self.client.new_bot(self.owner_login(), self.ctx.cfg.tgrass_owner_id, name)
@@ -230,7 +235,7 @@ class TGrassService:
             log.info("bot %s снова включён в TGrass mode=%s (админ %s)", bot_id, mode, admin_id)
             return
 
-        if not self.ctx.cfg.tgrass_factory_token or not self.ctx.cfg.tgrass_owner_id:
+        if not _factory_token(self.ctx.cfg) or not self.ctx.cfg.tgrass_owner_id:
             # без owner_id factory невозможна — сразу relay
             factory_err = TGrassError("не задан TGRASS_OWNER_ID")
             try:

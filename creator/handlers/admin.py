@@ -56,7 +56,8 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
                    [btn("🔄 Перезапустить все боты", "a:restartall")]],
         "settings": [[btn("🔒 Обязательная подписка", "a:set:gate")],
                      [btn("💡 Награда за идеи", "a:set:reward")],
-                     [btn("📞 Контакты поддержки", "a:set:contacts")]],
+                     [btn("📞 Контакты поддержки", "a:set:contacts")],
+                     [btn("🔑 Ключи интеграций", "ik:home")]],
     }
     integ = []
     if ctx is not None and ctx.tgrass is not None:
@@ -121,7 +122,7 @@ def panel_text(ctx: Ctx) -> str:
 @router.message(Command("admin"))
 @router.message(F.text == BTN_ADMIN)
 async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
-    ctx.source_inputs.pop(message.from_user.id, None)
+    ctx.discard_pending_secrets(message.from_user.id)
     bcb.clear_payload(message.from_user.id)
     await state.clear()
     await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
@@ -141,7 +142,7 @@ async def panel_group(cb: CallbackQuery, ctx: Ctx) -> None:
 
 @router.callback_query(F.data == "a:main")
 async def panel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
-    ctx.source_inputs.pop(cb.from_user.id, None)
+    ctx.discard_pending_secrets(cb.from_user.id)
     bcb.clear_payload(cb.from_user.id)
     await state.clear()
     await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx, cb.from_user.id))

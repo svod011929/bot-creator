@@ -61,7 +61,8 @@ def screen(ctx: Ctx, code: str):
     labels = {'env': 'серверная настройка (env)', 'manual': 'ключ сохранён в креаторе',
               'auto': 'прежний сохранённый автокэш хаба', 'unset': 'ключ не задан',
               'error': 'настройку не удалось прочитать; источник не подтверждён'}
-    factory = bool(ctx.cfg.tgrass_factory_token if code == 'tg' else ctx.cfg.piarflow_token)
+    from creator.integration_keys import value
+    factory = bool(value(ctx.cfg, "tgrass_factory" if code == "tg" else "piarflow"))
     text = (f'📡 <b>Источник ОП: {title}</b>\n\nИсточник: {labels[origin]}.\n'
             f'Токен фабрики: {"заданы" if factory else "не заданы"}.\n'
             'Это задания, которые сеть выдаёт по ключу источника креатора, '

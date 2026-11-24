@@ -130,6 +130,11 @@ def token_bot_id(token: str) -> int:
     return int(head) if head.isdigit() else 0
 
 
+
+def _account_token(cfg) -> str:
+    from creator.integration_keys import value
+    return value(cfg, "piarflow")
+
 class PiarFlowService:
     def __init__(self, ctx: "Ctx", client: PiarFlowClient, notify: Notify | None = None):
         self.ctx = ctx
@@ -178,7 +183,7 @@ class PiarFlowService:
                 source = store.resolve()
                 if source.key:
                     return source.key
-                if not self.ctx.cfg.piarflow_token or not self.ctx.cfg.bot_token:
+                if not _account_token(self.ctx.cfg) or not self.ctx.cfg.bot_token:
                     raise PiarFlowError("Нет ключа источника или данных для регистрации хаба")
                 bot = await self.client.add_bot(self.ctx.cfg.bot_token)
                 key = str(bot["api_key"])
@@ -208,7 +213,7 @@ class PiarFlowService:
         # Повторное включение уже зарегистрированного factory-бота — без /factory/bots заново.
         if t["status"] == "disabled" and prev_mode == "factory" and key and pf_id:
             try:
-                if not self.ctx.cfg.piarflow_token:
+                if not _account_token(self.ctx.cfg):
                     raise PiarFlowError("Нет данных фабрики")
                 await self.client.set_active(pf_id, True)
             except PiarFlowError as e:
@@ -243,7 +248,7 @@ class PiarFlowService:
 
         # Новая заявка (и любые pending): всегда factory → при ошибке relay.
         try:
-            if not self.ctx.cfg.piarflow_token:
+            if not _account_token(self.ctx.cfg):
                 raise PiarFlowError("Нет данных фабрики")
             bot = await self.client.add_bot(b["token"])
             key = str(bot["api_key"])

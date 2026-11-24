@@ -156,7 +156,8 @@ class SourceStore:
 
 
 def configured(cfg, provider: str) -> bool:
-    factory = cfg.tgrass_factory_token if provider == 'tgrass' else cfg.piarflow_token
+    from creator.integration_keys import value
+    factory = value(cfg, "tgrass_factory" if provider == "tgrass" else "piarflow")
     if factory:
         return True
     try:

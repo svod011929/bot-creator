@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -43,19 +42,8 @@ def sock_path(cfg) -> Path:
 
 def load_hub_key(cfg) -> str:
     """Bot API key of the constructor hub bot. Never falls back to the partner key."""
-    key = (getattr(cfg, "mgram_hub_api_key", None) or "").strip()
-    if key:
-        return key
-    path = Path(cfg.data_dir) / "mgram_hub.json"
-    if not path.is_file():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    return str(data.get("api_key") or data.get("key") or "").strip()
+    from creator.integration_keys import value
+    return value(cfg, "mgram_hub")
 
 
 def parse_reward(value: Any) -> float | None:

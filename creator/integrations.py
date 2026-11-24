@@ -8,11 +8,12 @@ from creator.tgrass import TGrassClient, TGrassService
 
 
 def ensure_services(ctx) -> None:
+    from creator.integration_keys import value
     for name, table, enabled, client, service, token, url in (
         ('tgrass', 'tgrass_bots', ctx.cfg.tgrass_enabled, TGrassClient, TGrassService,
-         ctx.cfg.tgrass_factory_token, ctx.cfg.tgrass_base_url),
+         value(ctx.cfg, "tgrass_factory"), ctx.cfg.tgrass_base_url),
         ('piarflow', 'pf_bots', ctx.cfg.piarflow_enabled, PiarFlowClient, PiarFlowService,
-         ctx.cfg.piarflow_token, ctx.cfg.piarflow_base_url),
+         value(ctx.cfg, "piarflow"), ctx.cfg.piarflow_base_url),
     ):
         # Existing recorded keys remain usable and accounted after removing a source.
         recorded = ctx.db.scalar(f"SELECT 1 FROM {table} WHERE api_key IS NOT NULL AND api_key<>'' "
