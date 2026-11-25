@@ -53,6 +53,7 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
                    [btn("💳 LavePay", "a:lave:0")]],
         "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")],
                    [btn("💡 Идеи пользователей", "a:ideas")],
+                   [btn("🏆 Конкурсы", "contest:view")],
                    [btn("🔄 Перезапустить все боты", "a:restartall")]],
         "settings": [[btn("🔒 Обязательная подписка", "a:set:gate")],
                      [btn("💡 Награда за идеи", "a:set:reward")],

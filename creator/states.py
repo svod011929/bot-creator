@@ -28,6 +28,7 @@ class Admin(StatesGroup):
     user_balance = State()
     bot_lookup = State()
     settings_input = State()
+    contest = State()
 
 
 class BotList(StatesGroup):

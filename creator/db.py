@@ -239,6 +239,15 @@ CREATE TABLE IF NOT EXISTS reports (
     text TEXT,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS contests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    prize_text TEXT NOT NULL,
+    starts_at INTEGER NOT NULL,
+    ends_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
 """
 
 
@@ -282,6 +291,7 @@ class DB:
         self._ensure_admin_actions()
         self._ensure_bot_broadcasts()
         self._ensure_mgram_task_proxy()
+        self._ensure_contests()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -1127,6 +1137,53 @@ class DB:
             return None
         row = self.one("SELECT bot_id FROM mgram_task_proxy WHERE token=?", token)
         return int(row["bot_id"]) if row else None
+
+
+    def _ensure_contests(self) -> None:
+        """Additive contest table for existing databases."""
+        with self._lock:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS contests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    prize_text TEXT NOT NULL,
+                    starts_at INTEGER NOT NULL,
+                    ends_at INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at INTEGER NOT NULL
+                )"""
+            )
+
+    def contest_create(self, title: str, prize_text: str, days: int) -> int:
+        """Create a contest and end any previously active one in the same transaction."""
+        self._ensure_contests()
+        title = ((title or "").strip() or "Конкурс")[:200]
+        prize_text = ((prize_text or "").strip() or "Призы")[:2000]
+        days = int(days)
+        if days < 1 or days > 365:
+            raise ValueError("days")
+        ts = now()
+        with self.tx() as c:
+            c.execute("UPDATE contests SET status='ended' WHERE status='active'")
+            cur = c.execute(
+                "INSERT INTO contests(title, prize_text, starts_at, ends_at, status, created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (title, prize_text, ts, ts + days * 86400, "active", ts),
+            )
+            return int(cur.lastrowid)
+
+    def contest_active(self) -> dict | None:
+        self._ensure_contests()
+        row = self.one(
+            "SELECT * FROM contests WHERE status='active' AND ends_at>? ORDER BY id DESC LIMIT 1",
+            now(),
+        )
+        return dict(row) if row else None
+
+    def contest_end(self, cid: int) -> None:
+        self._ensure_contests()
+        with self.tx() as c:
+            c.execute("UPDATE contests SET status='ended' WHERE id=?", (int(cid),))
 
     def idea_add(self, user_id: int, text: str) -> int:
         """Insert an idea in the same transactional helper used by voting."""

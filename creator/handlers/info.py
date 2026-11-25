@@ -90,6 +90,7 @@ def info_kb(ctx: Ctx):
     admin = url_btn("👑 Администратор", admin_url) if admin_url else btn("👑 Администратор", "info:admin")
     return ikb(
         links,
+        [btn("🏆 Конкурс", "contest:view")],
         [btn("❓ Помощь", "info:help")],
         [btn("📄 Документы", "info:docs")],
         [btn("💡 Идеи и обратная связь", "ideas")],
