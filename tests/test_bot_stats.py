@@ -49,8 +49,10 @@ async def test_card_has_stats_button_and_screen_definitions(env):  # noqa: F811
     m = last_edit(session)
     t = m.text
     assert "Пользователей всего: 6" in t
+    assert "Активных в базе: 4" in t  # 6 total, 2 blocked, none banned
     assert "24 ч — 2" in t and "7 дней — 4" in t and "30 дней — 5" in t
     assert "по реферальной ссылке: 3" in t and "недоступными при рассылке: 2" in t
+    assert "Доход с ОП" in t and "Сегодня: 0 ₽ (0 заданий)" in t
     assert "активных 1" in t and "выполнений 3" in t and "пользователей 2" in t
     assert "на рассмотрении 2" in t and "отмечено выплаченными 1" in t and "отклонено 1" in t
     assert "Не измеряется" in t and "u1" not in t and len(t) < 4096
@@ -128,3 +130,52 @@ async def test_username_is_escaped(env):  # noqa: F811
         c.execute("UPDATE bots SET username=? WHERE id=?", ("a<b>&", bot_id))
     await feed(cb_update(OWNER, f"bst:{bot_id}"))
     assert "a&lt;b&gt;&amp;" in last_edit(session).text
+
+
+def test_active_count_excludes_blocked_and_banned(tmp_path):
+    from creator.bot_stats import read
+
+    db = ChildDB(tmp_path / "bot.db")
+    now = int(time.time())
+    for uid, blocked, banned in ((1, 0, 0), (2, 1, 0), (3, 0, 1), (4, 1, 1)):
+        db.exec("INSERT INTO users(id,username,full_name,referrer_id,blocked,banned,created_at) VALUES(?,?,?,?,?,?,?)",
+                uid, f"u{uid}", "N", None, blocked, banned, now)
+    db.conn.close()
+    data = read(tmp_path / "bot.db", now=now)
+    assert data["users"][0] == 4
+    assert data["active"] == 1
+
+
+async def test_op_income_sums_tgrass_and_piarflow_windows(env):  # noqa: F811
+    from creator.bot_stats import op_income, render
+    from creator.money import rub
+
+    ctx, feed, session = env
+    await feed(msg_update(OWNER, "/start"))
+    bot_id = await create_paid_bot(ctx, feed, session)
+    now = int(time.time())
+    assert ctx.db.tgrass_credit(bot_id, 101, 11, 50, ts=now)
+    assert ctx.db.pf_credit(bot_id, 102, "https://t.me/x", 25, ts=now)
+    assert ctx.db.tgrass_credit(bot_id, 103, 12, 100, ts=now - 8 * 86400)
+    op = op_income(ctx.db, bot_id, now_ts=now)
+    assert op["day"] == (2, 75)
+    assert op["week"] == (2, 75)
+    assert op["all"] == (3, 175)
+    text = render(bot_id, "demo", {"users": (1, 0, 0, 0, 0, 0), "active": 1,
+                                   "tasks": (0,), "done": (0, 0), "withdrawals": (0, 0, 0)}, op)
+    assert f"Сегодня: {rub(75)} (2 заданий)" in text
+    assert f"За 7 дней: {rub(75)} (2 заданий)" in text
+    assert f"Всего: {rub(175)} (3 заданий)" in text
+
+
+async def test_bot_card_shows_active_and_op_income(env):  # noqa: F811
+    ctx, feed, session = env
+    await feed(msg_update(OWNER, "/start"))
+    bot_id = await create_paid_bot(ctx, feed, session)
+    seed(ctx, bot_id)
+    assert ctx.db.tgrass_credit(bot_id, 201, 21, 150, ts=int(time.time()))
+    session.clear()
+    await feed(cb_update(OWNER, f"b:{bot_id}:open"))
+    card = last_edit(session).text
+    assert "Пользователи: 6 (активных: 4)" in card
+    assert "Доход ОП: сегодня 1,50 ₽ · 7 дней 1,50 ₽" in card

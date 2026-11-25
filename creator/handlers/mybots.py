@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from child import templates
 from child.files import dir_size, human_size, write_setting
+from creator.bot_stats import op_income, read
 from creator.db import InsufficientFunds
 from creator.keyboards import BTN_MY, STATUS_TEXT, bot_card_kb, btn, cancel_kb, ikb
 from creator.lavepay_signup import lavepay_signup_link
@@ -43,12 +44,21 @@ def card_text(ctx: Ctx, b) -> str:
     disk = human_size(dir_size(ctx.sup.bot_dir(b["id"])))
     users = child_users_for_card(ctx.sup.bot_dir(b["id"]))
     users_s = "н/д" if users is None else str(users)
+    data = read(ctx.sup.bot_dir(b["id"]) / "bot.db")
+    active = data.get("active") if isinstance(data, dict) else None
+    active_s = "н/д" if active is None else str(active)
+    try:
+        op = op_income(ctx.db, b["id"])
+        op_day, op_week = rub(op["day"][1]), rub(op["week"][1])
+    except (TypeError, ValueError, ArithmeticError, AttributeError):
+        op_day = op_week = "н/д"
     lines = [
         f"🤖 <b>Бот ID {b['id']}</b>\n",
         f"Статус: {STATUS_TEXT.get(b['status'], b['status'])}",
         f"Ссылка: @{html.escape(b['username'] or '—')}",
         f"Шаблон: {t.button}",
-        f"Пользователи: {users_s}",
+        f"Пользователи: {users_s} (активных: {active_s})",
+        f"Доход ОП: сегодня {op_day} · 7 дней {op_week}",
         f"Использование диска: {disk}",
         f"Баланс хостинга: {rub(b['hosting_balance'])} ({_hosting_left_label(b['hosting_balance'], day)})",
         f"VIP: {'👑 да' if b['vip'] else 'нет'}",
