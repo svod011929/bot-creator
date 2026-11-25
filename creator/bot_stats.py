@@ -6,6 +6,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from creator.money import rub
+
 DAY = 86400
 MISSING, ERROR = "missing", "error"
 
@@ -33,8 +35,13 @@ def read(path: Path, now: int | None = None) -> dict | str:
                            "COALESCE(SUM(blocked=1),0) FROM users", now - DAY, now - 7 * DAY, now - 30 * DAY)
         if users is None:
             return ERROR
+        # Active = not blocked and not banned (banned may be absent on older child DBs).
+        active = _row(conn, "SELECT COUNT(*) FROM users WHERE blocked=0 AND COALESCE(banned,0)=0")
+        if active is None:
+            active = _row(conn, "SELECT COUNT(*) FROM users WHERE blocked=0")
         return {
             "users": users,
+            "active": active[0] if active else None,
             "tasks": _row(conn, "SELECT COALESCE(SUM(active=1),0) FROM tasks"),
             "done": _row(conn, "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM task_done"),
             "withdrawals": _row(conn, "SELECT COALESCE(SUM(status='pending'),0), COALESCE(SUM(status='paid'),0), "
@@ -44,14 +51,40 @@ def read(path: Path, now: int | None = None) -> dict | str:
         conn.close()
 
 
+def op_income(db, bot_id: int, now_ts: int | None = None) -> dict:
+    """Доход с ОП (TGrass + PiarFlow) из базы конструктора. Возвращает число заданий и копейки."""
+    from creator.db import day_start
+
+    now_ts = int(time.time()) if now_ts is None else now_ts
+    day = day_start(now_ts)
+    week = now_ts - 7 * DAY
+
+    def _sum(since: int) -> tuple[int, int]:
+        try:
+            t_count, t_kop = db.tgrass_stats(bot_id, since)
+            p_count, p_kop = db.pf_stats(bot_id, since)
+            return int(t_count) + int(p_count), int(t_kop) + int(p_kop)
+        except (TypeError, ValueError, ArithmeticError, AttributeError):
+            return 0, 0
+
+    d_count, d_kop = _sum(day)
+    w_count, w_kop = _sum(week)
+    a_count, a_kop = _sum(0)
+    return {
+        "day": (d_count, d_kop),
+        "week": (w_count, w_kop),
+        "all": (a_count, a_kop),
+    }
+
+
 NOTE = ("<i>Окна считаются от текущего момента. «Недоступны» — доставка рассылки этому пользователю была "
-        "отклонена и он ещё не вернулся в бота. Суммы не показываются: у бота своя единица баланса, "
-        "а «выплачено» — отметка владельца, не подтверждение перевода.\n"
-        "Не измеряется этой сводкой: активность и возвраты пользователей, удержание, конверсия, доход, "
+        "отклонена и он ещё не вернулся в бота. Суммы заявок на вывод не показываются: у бота своя единица "
+        "баланса, а «выплачено» — отметка владельца, не подтверждение перевода.\n"
+        "Не измеряется этой сводкой: активность и возвраты пользователей, удержание, конверсия, доход внутри бота, "
         "живой ответ бота в Telegram. Наблюдаемая активность доступна отдельной кнопкой после начала сбора.</i>")
 
 
-def render(bot_id: int, username: str | None, data: dict | str) -> str:
+def render(bot_id: int, username: str | None, data: dict | str, op: dict | None = None) -> str:
     head = f"📊 <b>Статистика бота @{html.escape(username or '—')}</b> (ID {bot_id})\n"
     if data == MISSING:
         return (
@@ -64,16 +97,40 @@ def render(bot_id: int, username: str | None, data: dict | str) -> str:
             "Если ошибка повторяется, напишите в поддержку."
         )
     total, d1, d7, d30, refs, blocked = data["users"]
+    active = data.get("active")
     tasks, done, wd = data["tasks"], data["done"], data["withdrawals"]
     tasks_line = ("нет данных" if tasks is None or done is None
                   else f"активных {tasks[0]}; выполнений {done[0]}, пользователей {done[1]}")
     wd_line = ("нет данных" if wd is None
                else f"на рассмотрении {wd[0]} · отмечено выплаченными {wd[1]} · отклонено {wd[2]}")
+    active_line = "нет данных" if active is None else str(active)
+
+    if op:
+        dc, dk = op["day"]
+        wc, wk = op["week"]
+        ac, ak = op["all"]
+        op_block = (
+            f"💰 <b>Доход с ОП</b>\n"
+            f"• Сегодня: {rub(dk)} ({dc} заданий)\n"
+            f"• За 7 дней: {rub(wk)} ({wc} заданий)\n"
+            f"• Всего: {rub(ak)} ({ac} заданий)\n\n"
+        )
+    else:
+        op_block = (
+            "💰 <b>Доход с ОП</b>\n"
+            "• Сегодня: нет данных\n"
+            "• За 7 дней: нет данных\n\n"
+        )
+
     tip = "\n💡 Совет: если пользователей мало — проверьте оформление, первый шаг и реферальную ссылку внутри бота."
     return (head + "Сводка по базе бота на момент открытия.\n\n"
-            f"👥 Пользователей всего: {total}\n"
-            f"🆕 Новых за последние 24 ч — {d1} · 7 дней — {d7} · 30 дней — {d30}\n"
-            f"🔗 Пришли по реферальной ссылке: {refs}\n"
-            f"🚫 Отмечены недоступными при рассылке: {blocked}\n"
-            f"📋 Свои задания: {tasks_line}\n"
-            f"💸 Заявки на вывод: {wd_line}\n\n" + NOTE + tip)
+            f"👥 <b>Пользователи</b>\n"
+            f"• Пользователей всего: {total}\n"
+            f"• Активных в базе: {active_line}\n"
+            f"• Новых за последние 24 ч — {d1} · 7 дней — {d7} · 30 дней — {d30}\n"
+            f"• Пришли по реферальной ссылке: {refs}\n"
+            f"• Отмечены недоступными при рассылке: {blocked}\n\n"
+            + op_block
+            + f"📋 <b>Свои задания</b>: {tasks_line}\n"
+            f"💸 <b>Заявки на вывод</b>: {wd_line}\n\n"
+            + NOTE + tip)

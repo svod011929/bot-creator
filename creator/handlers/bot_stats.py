@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from creator.bot_stats import read, render
+from creator.bot_stats import op_income, read, render
 from creator.engagement import request as activity_request
 from creator.keyboards import btn, ikb
 from creator.services import Ctx
@@ -42,11 +42,12 @@ async def open_stats(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         await cb.answer(ACTIVE, show_alert=True)
         return
     data = await asyncio.to_thread(read, ctx.sup.bot_dir(bot_id) / "bot.db")
+    op = await asyncio.to_thread(op_income, ctx.db, bot_id)
     latest = _owned(ctx, bot_id, uid)
     if latest is None or latest["token"] != row["token"]:
         await cb.answer(UNAVAILABLE, show_alert=True)
         return
-    text = render(bot_id, latest["username"], data)
+    text = render(bot_id, latest["username"], data, op)
     try:
         await cb.message.edit_text(text, reply_markup=ikb([btn("📈 Активность и возвращения", activity_request(bot_id))],
                                                           [btn("🔄 Обновить", f"bst:{bot_id}")],
