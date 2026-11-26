@@ -203,6 +203,8 @@ async def test_hidden_without_token(env):  # noqa: F811
     bot_id = await create_paid_bot(ctx, feed, session)
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     assert "💸 Доп заработок" not in kb_texts(_last_kb(session))
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
+    assert "💸 Доп заработок" not in kb_texts(_last_kb(session))
     await feed(cb_update(OWNER, f"b:{bot_id}:tg"))  # кнопки нет — и экран не открывается
     assert ctx.db.tgrass(bot_id) is None
 
@@ -215,6 +217,8 @@ def _last_kb(session):
 async def test_apply_approve_credit_disable(tenv):
     ctx, feed, session, client, bot_id = tenv
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
+    assert "💰 Заработок" in kb_texts(_last_kb(session))
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
     assert "💸 Доп заработок" in kb_texts(_last_kb(session))
 
     await feed(cb_update(OWNER, f"b:{bot_id}:tg"))

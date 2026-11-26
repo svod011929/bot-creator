@@ -133,8 +133,8 @@ async def test_my_bots_card_and_actions(env):
     assert lst.reply_markup.inline_keyboard[0][0].text == f"ID {bot_id} · 0 👤 | Кликер бот 🟢"
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     card = session.texts()[-1]
-    for part in ("Статус: 🟢 Запущен", "@my_clicker_bot", "Шаблон: ⛏ Кликер бот", "Использование диска",
-                 "Баланс хостинга: 31,50 ₽ (≈7 дн.)"):
+    for part in ("🟢 Запущен", "@my_clicker_bot", "Шаблон: ⛏ Кликер бот", "Диск:",
+                 "Хостинг: 31,50 ₽ (≈7 дн.)"):
         assert part in card
 
     # чужой пользователь не может управлять ботом

@@ -177,5 +177,5 @@ async def test_bot_card_shows_active_and_op_income(env):  # noqa: F811
     session.clear()
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     card = last_edit(session).text
-    assert "Пользователи: 6 (активных: 4)" in card
-    assert "Доход ОП: сегодня 1,50 ₽ · 7 дней 1,50 ₽" in card
+    assert "Пользователи: 6 (активных 4)" in card
+    assert "Доход ОП: сегодня 1,50 ₽ · 7д 1,50 ₽" in card

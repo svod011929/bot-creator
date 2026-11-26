@@ -352,6 +352,7 @@ async def test_owner_and_admin_can_open_webhook_urls(env):  # noqa: F811
     # button should exist on the card
     await feed(msg_update(OWNER, "🤖 Мои боты"))
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
     texts = [(b.text, b.callback_data) for m in session.requests
              for kb in [getattr(m, "reply_markup", None)]
              for row in (getattr(kb, "inline_keyboard", None) or [])

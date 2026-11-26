@@ -6,13 +6,13 @@ import html
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from child import templates
 from child.files import dir_size, human_size, write_setting
 from creator.bot_stats import op_income, read
 from creator.db import InsufficientFunds
-from creator.keyboards import BTN_MY, STATUS_TEXT, bot_card_kb, btn, cancel_kb, ikb
+from creator.keyboards import BTN_MY, STATUS_TEXT, bot_card_group_kb, bot_card_kb, btn, cancel_kb, ikb
 from creator.lavepay_signup import lavepay_signup_link
 from creator.money import parse_rub, rub
 from creator.services import Ctx
@@ -52,19 +52,24 @@ def card_text(ctx: Ctx, b) -> str:
         op_day, op_week = rub(op["day"][1]), rub(op["week"][1])
     except (TypeError, ValueError, ArithmeticError, AttributeError):
         op_day = op_week = "н/д"
-    lines = [
-        f"🤖 <b>Бот ID {b['id']}</b>\n",
-        f"Статус: {STATUS_TEXT.get(b['status'], b['status'])}",
-        f"Ссылка: @{html.escape(b['username'] or '—')}",
+
+    status = STATUS_TEXT.get(b["status"], b["status"])
+    username = html.escape(b["username"] or "—")
+    main = [
+        f"🤖 <b>Бот #{b['id']}</b>",
+        f"{status} · @{username}",
         f"Шаблон: {t.button}",
-        f"Пользователи: {users_s} (активных: {active_s})",
-        f"Доход ОП: сегодня {op_day} · 7 дней {op_week}",
-        f"Использование диска: {disk}",
-        f"Баланс хостинга: {rub(b['hosting_balance'])} ({_hosting_left_label(b['hosting_balance'], day)})",
-        f"VIP: {'👑 да' if b['vip'] else 'нет'}",
     ]
     if b["sale_price"] is not None:
-        lines.append(f"🛒 Выставлен на продажу за {rub(b['sale_price'])}")
+        main.append(f"🛒 На продаже за {rub(b['sale_price'])}")
+
+    details = [
+        f"Пользователи: {users_s} (активных {active_s})",
+        f"Доход ОП: сегодня {op_day} · 7д {op_week}",
+        f"Диск: {disk}",
+        f"Хостинг: {rub(b['hosting_balance'])} ({_hosting_left_label(b['hosting_balance'], day)})",
+        f"VIP: {'да' if b['vip'] else 'нет'}",
+    ]
     tools = ["оформление"]
     if b["template"] in {"clicker", "refbot", "starbot"}:
         tools.append("контент")
@@ -76,26 +81,31 @@ def card_text(ctx: Ctx, b) -> str:
         tools.append("треки")
     if b["template"] in {"clicker", "refbot", "microtasks"}:
         tools.append("LavePay")
-    lines.append(f"Инструменты: {', '.join(tools)}")
+    details.append(f"Инструменты: {', '.join(tools)}")
     if ctx.tgrass is not None:
-        lines.append(_network_status_line("TGrass", ctx.db.tgrass(b["id"])))
+        details.append(_network_status_line("TGrass", ctx.db.tgrass(b["id"])))
     if ctx.piarflow is not None:
-        lines.append(_network_status_line("PiarFlow", ctx.db.pf(b["id"])))
+        details.append(_network_status_line("PiarFlow", ctx.db.pf(b["id"])))
     if b["last_error"] and b["status"] != "running":
         # не светим потенциальные секреты из чужих систем — только уже сохранённый last_error процесса
         err = html.escape(str(b["last_error"])[:300])
-        lines.append(f"\n⚠️ {err}")
-    return "\n".join(lines)
+        details.append(f"⚠️ {err}")
+
+    text = "\n".join(main)
+    if details:
+        text += "\n\n<blockquote>" + "\n".join(details) + "</blockquote>"
+    return text
 
 
 async def show(cb_or_msg, text: str, kb) -> None:
+    preview = LinkPreviewOptions(is_disabled=True)
     if isinstance(cb_or_msg, CallbackQuery):
         try:
-            await cb_or_msg.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+            await cb_or_msg.message.edit_text(text, reply_markup=kb, link_preview_options=preview)
         except TelegramBadRequest:
-            await cb_or_msg.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+            await cb_or_msg.message.answer(text, reply_markup=kb, link_preview_options=preview)
     else:
-        await cb_or_msg.answer(text, reply_markup=kb, disable_web_page_preview=True)
+        await cb_or_msg.answer(text, reply_markup=kb, link_preview_options=preview)
 
 
 async def show_card(target, ctx: Ctx, bot_id: int) -> None:
@@ -139,6 +149,24 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         return
     day = ctx.price("HOSTING_DAY_PRICE")
     await state.clear()
+
+    if action == "g" and args:
+        group = args[0]
+        has_wh = bool(getattr(ctx, "unsub", None) and (ctx.db.tgrass(bot_id) or ctx.db.pf(bot_id)))
+        kb = bot_card_group_kb(b, group, b["sale_price"] is not None, ctx.extra_earn, webhooks=has_wh)
+        if kb is None:
+            await cb.answer("Раздел устарел", show_alert=True)
+            return
+        titles = {
+            "manage": "⚙️ Управление",
+            "hosting": "💳 Хостинг и VIP",
+            "content": "🎨 Оформление и контент",
+            "earn": "💰 Заработок",
+        }
+        title = titles.get(group, group)
+        await show(cb, f"{title}\n\nВыберите действие:", kb)
+        await cb.answer()
+        return
 
     if action in {"mgram", "mgram_reg"}:
         from creator.handlers.mgram import mgram_register, mgram_screen

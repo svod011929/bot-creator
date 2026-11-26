@@ -133,6 +133,9 @@ async def test_owner_can_apply_with_zero_users_and_admin_approves(env, tmp_path)
     bot_id = await create_paid_bot(ctx, feed, session)
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     labels = [(b.text, b.callback_data) for r in session.of(EditMessageText)[-1].reply_markup.inline_keyboard for b in r]
+    assert ("💰 Заработок", f"b:{bot_id}:g:earn") in labels
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
+    labels = [(b.text, b.callback_data) for r in session.of(EditMessageText)[-1].reply_markup.inline_keyboard for b in r]
     assert ("🚀 Boostly", f"b:{bot_id}:bl") in labels
     await feed(cb_update(OWNER, f"b:{bot_id}:bl"))
     text = session.texts()[-1]
