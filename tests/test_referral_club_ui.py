@@ -68,6 +68,8 @@ async def test_owner_wizard_draft_edit_and_publish_flow(tmp_path, bot, session):
     app, feed, clock = await setup(tmp_path, bot)
     await feed(msg_update(OWNER, "/start"))
     await feed(msg_update(OWNER, "/admin"))
+    assert "adm:g:tools" in callbacks(last_screen(session))
+    await feed(cb_update(OWNER, "adm:g:tools"))
     assert "club:admin:0" in callbacks(last_screen(session))
     await feed(cb_update(OWNER, "club:new"))
     for value in ("Synthetic campaign", "Read the rules", "2", "45", "10", "7", "Which answer?", "First\nSecond\nThird"):

@@ -211,6 +211,56 @@ async def test_owner_admin_is_private_and_setting_is_logged(tmp_path, bot, sessi
     assert any(r["action"] == "setting" and r["target"] == "click_reward" for r in rows)
 
 
+def _inline(msg):
+    return [(b.text, b.callback_data, b.url) for row in msg.reply_markup.inline_keyboard for b in row]
+
+
+async def test_owner_admin_groups_keep_all_actions(tmp_path, bot, session):
+    from aiogram.methods import EditMessageText, SendMessage
+
+    write_config(tmp_path, {
+        "token": "42:TEST", "template": "clicker", "owner_id": OWNER, "username": "kid_bot",
+        "vip": False, "creator_username": "creator_bot", "bot_id": 77,
+    })
+    app = ChildApp(tmp_path)
+    dp = build_dispatcher(app)
+
+    async def feed(update):
+        await dp.feed_update(bot, update)
+
+    await feed(msg_update(OWNER, "⚙️ Админка"))
+    root = _inline(session.of(SendMessage)[-1])
+    assert [(t, d) for t, d, _u in root] == [
+        ("📊 Обзор", "adm:g:overview"),
+        ("👥 Люди", "adm:g:people"),
+        ("💰 Деньги", "adm:g:money"),
+        ("🛠 Инструменты", "adm:g:tools"),
+    ]
+
+    await feed(cb_update(OWNER, "adm:g:overview"))
+    overview = _inline(session.of(EditMessageText)[-1])
+    assert ("📊 Статистика", "adm:stats", None) in overview
+    assert ("⬅️ Назад", "adm:main", None) in overview
+
+    await feed(cb_update(OWNER, "adm:g:people"))
+    people = _inline(session.of(EditMessageText)[-1])
+    assert ("👤 Пользователи", "adm:users:0", None) in people
+    assert ("📜 Журнал", "adm:olog:0", None) in people
+
+    await feed(cb_update(OWNER, "adm:g:money"))
+    money = _inline(session.of(EditMessageText)[-1])
+    assert ("💸 Заявки", "adm:wd", None) in money
+    assert all(d != "adm:bc" for _t, d, _u in money)
+
+    await feed(cb_update(OWNER, "adm:g:tools"))
+    tools = _inline(session.of(EditMessageText)[-1])
+    assert ("⚙️ Настройки", "adm:set", None) in tools
+    assert ("📢 Рассылка", "adm:bc", None) in tools
+    assert ("🎯 События", None, "https://t.me/creator_bot?start=events_77") in tools
+    assert ("🎨 Оформление", None, "https://t.me/creator_bot?start=pres_77") in tools
+    assert ("🔒 Настроить подписку в конструкторе", None, "https://t.me/creator_bot?start=sub_77") in tools
+
+
 async def test_owner_user_filters(tmp_path, bot, session):
     app, feed = make(tmp_path, "clicker", bot)
     await feed(msg_update(A, "/start"))

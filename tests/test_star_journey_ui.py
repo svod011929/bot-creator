@@ -84,6 +84,8 @@ async def test_full_owner_editor_preview_edit_save_publish_pause_copy(tmp_path, 
     app, feed, clock = await setup(tmp_path, bot)
     await feed(msg_update(OWNER, "/start"))
     await feed(msg_update(OWNER, "/admin"))
+    assert "adm:g:tools" in callbacks(last_screen(session))
+    await feed(cb_update(OWNER, "adm:g:tools"))
     assert "sky:admin:0" in callbacks(last_screen(session))
     await feed(cb_update(OWNER, "sky:new"))
     await click(feed, session, OWNER, "sky:input:category:story:")

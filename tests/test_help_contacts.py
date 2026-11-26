@@ -51,7 +51,7 @@ async def test_help_screen_with_links(env):  # noqa: F811
         assert part in screen.text
     assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in screen.text
     assert LAVEPAY_SIGNUP_URL not in screen.text.replace(f'href="{LAVEPAY_SIGNUP_URL}"', "")
-    assert screen.disable_web_page_preview is True
+    assert screen.link_preview_options is not None and screen.link_preview_options.is_disabled is True
     assert kb(screen) == [("💬 Чат", CHAT), ("📢 Канал", CHANNEL), ("👑 Администратор", "https://t.me/DDDDEVELOPER"),
                           ("⛔ Оповестить о проблеме", "info:report"), ("⬅️ Назад", "info:back")]
     new = session.requests[before:]
@@ -101,7 +101,7 @@ async def test_help_command_and_card_tips(env):  # noqa: F811
     help_msg = session.of(SendMessage)[-1]
     assert "Как создать бота" in (help_msg.text or "")
     assert f'<a href="{LAVEPAY_SIGNUP_URL}">LavePay</a>' in (help_msg.text or "")
-    assert help_msg.disable_web_page_preview is True
+    assert help_msg.link_preview_options is not None and help_msg.link_preview_options.is_disabled is True
     session.requests.clear()
     await feed(cb_update(OWNER, f"b:{bot_id}:tips"))
     tips = [m for m in session.requests if isinstance(m, (SendMessage, EditMessageText))

@@ -6,20 +6,18 @@ import time
 from datetime import date
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from creator.config import support_url
-from creator.keyboards import BTN_INFO, btn, cancel_kb, ikb, url_btn
+from creator.keyboards import BTN_INFO, cancel_kb
 from creator.lavepay_signup import lavepay_signup_link
 from creator.legal import DOCS, FILES
 from creator.services import Ctx
 from creator.states import Info
+from creator.ui import btn, grid, ikb, screen, show, url_btn, with_nav
 
 router = Router(name="info")
-
-SEP = "➖➖➖➖➖➖➖➖"
 
 
 def days_running(ctx: Ctx) -> int:
@@ -34,44 +32,31 @@ def days_running(ctx: Ctx) -> int:
 
 def info_text(ctx: Ctx) -> str:
     s = ctx.db.stats()
-    return (
-        f"🗃 <b>Информация</b>\n{SEP}\n"
-        f"⏱ <b>Работаем:</b> {days_running(ctx)} дн.\n{SEP}\n"
-        f"▪️ <b>Пользователи:</b>\n"
-        f"👤 Пользователей всего: {s['users_total']}\n"
-        f"👤 Пользователей сегодня: {s['users_today']}\n{SEP}\n"
-        f"▪️ <b>Боты:</b>\n"
-        f"🤖 Ботов всего: {s['bots_total']}\n"
-        f"🚀 Ботов запущено: {s['bots_running']}\n{SEP}"
+    return screen(
+        "Информация",
+        f"⏱ Работаем: {days_running(ctx)} дн.",
+        f"👤 Пользователей всего: {s['users_total']}",
+        f"👤 Пользователей сегодня: {s['users_today']}",
+        f"🤖 Ботов всего: {s['bots_total']}",
+        f"🚀 Ботов запущено: {s['bots_running']}",
     )
 
 
-HELP = (
-    "❓ <b>Помощь по конструктору</b>\n" + SEP + "\n"
-    "🚀 <b>Как создать бота</b>\n"
-    "1. Нажмите «🔨 Создать бота»\n"
-    "2. Выберите шаблон (кликер, реферальный, звёздный или задания)\n"
-    "3. Пришлите токен, полученный у @BotFather\n"
-    "4. Бот появится в «🤖 Мои боты». Откройте карточку и нажмите «📋 Первый запуск».\n\n"
-    "🤖 <b>Управление ботами</b>\n"
-    "В карточке: запуск/остановка, статистика, оформление, контент, настройки, хостинг и VIP. "
-    "Опасные действия (передать, удалить) — внизу.\n\n"
-    "💳 <b>Хостинг и баланс</b>\n"
-    "Платный хостинг списывается с баланса бота. Пополняйте в «💼 Мой кабинет» или в карточке бота. "
-    "Если баланс закончился — бот остановится, пополните и запустите снова.\n\n"
-    "🔑 <b>Токен бота</b>\n"
-    "Отправляйте токен только в конструктор. Если перевыпустили в @BotFather — бот остановится с ошибкой. "
-    "Напишите в поддержку, чтобы обновить.\n\n"
-    "💸 <b>Выплаты пользователям</b>\n"
-    "Вы сами обрабатываете заявки на вывод в своих ботах. "
-    "Для кликера, реф-бота и заданий можно подключить свой магазин "
-    f"{lavepay_signup_link('LavePay')} — тогда выплаты идут в USDT TRC-20 после вашего подтверждения. "
-    "Без магазина — только ручная отметка «выплачено». Конструктор деньги не переводит.\n\n"
-    "🎨 <b>Оформление и контент</b>\n"
-    "В карточке бота: «🎨 Оформление» — приветствие и сценарий запуска; «📚 Контент» — карточки, кампании, треки.\n\n"
-    "↩️ <b>Если запутались</b>\n"
-    "/cancel или любая кнопка главного меню отменяет текущий ввод и возвращает в меню. "
-    "/help всегда показывает эту справку."
+HELP = screen(
+    "Помощь по конструктору",
+    "🚀 Как создать бота: «🔨 Создать бота» → шаблон → токен от @BotFather → «📋 Первый запуск».",
+    "🤖 Управление: в карточке — запуск, статистика, оформление, контент, хостинг, VIP. Опасные действия внизу.",
+    "💳 Хостинг: списывается с баланса бота. Пополняйте в кабинете или карточке. Если закончился — бот остановится.",
+    "🔑 Токен: отправляйте только в конструктор. Перевыпуск в @BotFather останавливает бота — пишите в поддержку.",
+    "💸 Выплаты пользователям: вы сами обрабатываете заявки. Для кликера, реф-бота и заданий можно подключить свой магазин "
+    + lavepay_signup_link("LavePay")
+    + " — выплаты в USDT TRC-20 после вашего подтверждения.",
+    details_lines=[
+        "Без магазина — только ручная отметка «выплачено». Конструктор деньги не переводит.",
+        "🎨 Оформление и контент: в карточке бота («🎨 Оформление» и «📚 Контент»).",
+        "↩️ Если запутались: /cancel или кнопка меню отменяет ввод. /help показывает эту справку.",
+    ],
+    expandable=True,
 )
 
 
@@ -87,44 +72,48 @@ def contact_buttons(ctx: Ctx) -> tuple[list, str]:
 
 def info_kb(ctx: Ctx):
     links, admin_url = contact_buttons(ctx)
-    admin = url_btn("👑 Администратор", admin_url) if admin_url else btn("👑 Администратор", "info:admin")
-    return ikb(
-        links,
-        [btn("🏆 Конкурс", "contest:view")],
-        [btn("❓ Помощь", "info:help")],
-        [btn("📄 Документы", "info:docs")],
-        [btn("💡 Идеи и обратная связь", "ideas")],
-        [btn("⛔ Оповестить о проблеме", "info:report")],
-        [admin],
-    )
+    buttons = []
+    if links:
+        buttons.extend(links)
+    buttons += [
+        btn("🏆 Конкурс", "contest:view"),
+        btn("❓ Помощь", "info:help"),
+        btn("📄 Документы", "info:docs"),
+        btn("💡 Идеи и обратная связь", "ideas"),
+        btn("⛔ Оповестить о проблеме", "info:report", style="danger"),
+    ]
+    if admin_url:
+        buttons.append(url_btn("👑 Администратор", admin_url))
+    else:
+        buttons.append(btn("👑 Администратор", "info:admin"))
+    return with_nav(grid(buttons, 2))
 
 
 def help_kb(ctx: Ctx):
     links, admin_url = contact_buttons(ctx)
-    rows = [links] if links else []
+    rows = []
+    if links:
+        rows.append(links)
     if admin_url:
         rows.append([url_btn("👑 Администратор", admin_url)])
-    rows += [[btn("⛔ Оповестить о проблеме", "info:report")], [btn("⬅️ Назад", "info:back")]]
+    rows.append([btn("⛔ Оповестить о проблеме", "info:report", style="danger")])
+    rows.append([btn("⬅️ Назад", "info:back")])
     return ikb(*rows)
 
 
 def help_text(ctx: Ctx) -> str:
     links, admin_url = contact_buttons(ctx)
-    if links or admin_url:
-        return HELP + "\n\nСвязь — кнопками ниже. Описать проблему можно через «⛔ Оповестить о проблеме»."
-    return HELP + "\n\nСвязь с администратором — через «⛔ Оповестить о проблеме»."
+    extra = "Связь — кнопками ниже." if (links or admin_url) else "Связь через «⛔ Оповестить о проблеме»."
+    return HELP + "\n\n" + extra
 
 
 @router.message(F.text == BTN_INFO)
 async def info(message: Message, ctx: Ctx) -> None:
-    await message.answer(info_text(ctx), reply_markup=info_kb(ctx))
+    await show(message, info_text(ctx), info_kb(ctx))
 
 
 async def _show(cb: CallbackQuery, text: str, markup) -> None:
-    try:
-        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except TelegramBadRequest:
-        await cb.message.answer(text, reply_markup=markup, disable_web_page_preview=True)
+    await show(cb, text, markup)
 
 
 @router.callback_query(F.data == "info:help")
@@ -148,16 +137,13 @@ async def admin_contact(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "info:docs")
 async def docs_menu(cb: CallbackQuery) -> None:
     await cb.answer()
-    text = (
-        "📄 <b>Документы</b>\n\n"
-        "Ознакомьтесь с условиями использования сервиса."
-    )
-    kb = ikb(
-        [btn("📜 Пользовательское соглашение", "info:doc:agreement")],
-        [btn("🔒 Политика конфиденциальности", "info:doc:privacy")],
-        [btn("📋 Публичная оферта", "info:doc:offer")],
-        [btn("⬅️ Назад", "info:back")],
-    )
+    text = screen("Документы", "Ознакомьтесь с условиями использования сервиса.")
+    buttons = [
+        btn("📜 Пользовательское соглашение", "info:doc:agreement"),
+        btn("🔒 Политика конфиденциальности", "info:doc:privacy"),
+        btn("📋 Публичная оферта", "info:doc:offer"),
+    ]
+    kb = with_nav(grid(buttons, 1), back_data="info:back")
     await _show(cb, text, kb)
 
 

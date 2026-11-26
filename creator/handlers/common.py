@@ -132,4 +132,5 @@ async def cancel_cmd(message: Message, state: FSMContext, ctx: Ctx) -> None:
 @router.message(F.text == "/help")
 async def help_cmd(message: Message, ctx: Ctx) -> None:
     from creator.handlers.info import help_text
-    await message.answer(help_text(ctx), reply_markup=main_kb(ctx.is_admin(message.from_user.id)), disable_web_page_preview=True)
+    from creator.ui import show
+    await show(message, help_text(ctx), main_kb(ctx.is_admin(message.from_user.id)))
