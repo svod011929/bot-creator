@@ -1254,6 +1254,34 @@ class DB:
                     FOREIGN KEY (bot_id) REFERENCES bots(id)
                 )"""
             )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_shown (
+                    bot_id INTEGER NOT NULL,
+                    tg_user_id INTEGER NOT NULL,
+                    task_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (bot_id, tg_user_id, task_id)
+                )"""
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_boostly_shown_task ON boostly_shown(tg_user_id, task_id)"
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_events (
+                    event_id TEXT PRIMARY KEY,
+                    sequence INTEGER,
+                    event_type TEXT,
+                    task_id TEXT,
+                    tg_user_id INTEGER,
+                    processed_at INTEGER NOT NULL
+                )"""
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )"""
+            )
 
     def boostly(self, bot_id: int):
         return self.one("SELECT * FROM boostly_bots WHERE bot_id=?", bot_id)
@@ -1360,6 +1388,65 @@ class DB:
             return None
         row = self.one("SELECT bot_id FROM boostly_task_proxy WHERE token=?", token)
         return int(row["bot_id"]) if row else None
+
+    def boostly_remember_shown(self, bot_id: int, tg_user_id: int, task_ids: list[str]) -> None:
+        """Remember which child showed a task so events can credit the right owner."""
+        rows = []
+        ts = now()
+        for raw in task_ids:
+            task_id = str(raw or "").strip()[:128]
+            if task_id:
+                rows.append((bot_id, tg_user_id, task_id, ts))
+        if not rows:
+            return
+        with self._lock:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO boostly_shown(bot_id,tg_user_id,task_id,created_at) VALUES(?,?,?,?)",
+                rows,
+            )
+
+    def boostly_shown_bots(self, tg_user_id: int, task_id: str) -> list[int]:
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return []
+        rows = self.all(
+            "SELECT bot_id FROM boostly_shown WHERE tg_user_id=? AND task_id=? ORDER BY created_at DESC, bot_id",
+            tg_user_id, task_id,
+        )
+        return [int(r["bot_id"]) for r in rows]
+
+    def boostly_event_cursor(self) -> int:
+        row = self.one("SELECT value FROM boostly_meta WHERE key=?", "events_after_sequence")
+        if not row:
+            return 0
+        try:
+            return max(0, int(row["value"]))
+        except (TypeError, ValueError):
+            return 0
+
+    def boostly_set_event_cursor(self, sequence: int) -> None:
+        sequence = max(0, int(sequence))
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO boostly_meta(key, value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("events_after_sequence", str(sequence)),
+            )
+
+    def boostly_record_event(self, event_id: str, sequence: int | None, event_type: str,
+                             task_id: str | None, tg_user_id: int | None) -> bool:
+        """Return True if this event id is new and was recorded."""
+        event_id = str(event_id or "").strip()[:200]
+        if not event_id:
+            return False
+        with self.tx() as c:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO boostly_events(event_id,sequence,event_type,task_id,tg_user_id,processed_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (event_id, sequence, (event_type or "")[:64], (task_id or "")[:128] or None,
+                 tg_user_id, now()),
+            )
+            return cur.rowcount == 1
 
     def idea_add(self, user_id: int, text: str) -> int:
         """Insert an idea in the same transactional helper used by voting."""

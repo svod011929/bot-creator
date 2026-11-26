@@ -113,6 +113,7 @@ async def run() -> None:
     if cfg.webhook_listen_port:
         unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
     from creator.boostly import BoostlyService
+    from creator.boostly_tasks import events_loop as boostly_events_loop
     from creator.boostly_tasks import start_proxy as start_boostly_proxy
     from creator.boostly_tasks import stop_proxy as stop_boostly_proxy
     from creator.mgram_hub import ensure_hub_key
@@ -126,6 +127,7 @@ async def run() -> None:
     mgram_proxy_runner = await start_proxy(cfg, db)
     ctx.boostly = BoostlyService(ctx)
     boostly_proxy_runner = await start_boostly_proxy(cfg, db)
+    tasks.append(asyncio.create_task(boostly_events_loop(cfg, db)))
     from creator.integrations import ensure_services, wait_and_sync
     ensure_services(ctx)
     for network in ("tgrass", "piarflow"):

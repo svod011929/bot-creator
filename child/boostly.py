@@ -21,7 +21,12 @@ PASS_TTL = 600
 NO_TASKS_TTL = 300
 ERROR_TTL = 120
 CHECK_CB = "bl_chk"
+TASKS_CHECK_CB = "bl_tsk"
+TASKS_REFRESH_CB = "bl_ref"
+BTN_TASKS = "🚀 Boostly"
 TEXT = "📢 Чтобы пользоваться ботом, выполните задания и нажмите «✅ Проверить»."
+TASKS_TEXT = "🚀 <b>Задания Boostly</b>\nВыполните задание и нажмите «✅ Проверить»."
+EMPTY_TEXT = "Заданий пока нет, загляните позже."
 _NET = "boostly"
 REQUEST_TIMEOUT = 12.0
 LEAKED_FIELDS = (
@@ -140,18 +145,76 @@ class BoostlyGate:
     def _remember_pass(self, uid: int, until: float) -> None:
         self._pass_until[uid] = until
 
-    async def check(self, u: User, force: bool = False) -> InlineKeyboardMarkup | None:
-        now = time.time()
-        if not force and self._pass_until.get(u.id, 0) > now:
-            return None
-        meta = {}
+    def user_meta(self, u: User) -> dict[str, Any] | None:
+        meta: dict[str, Any] = {}
         if u.language_code:
             meta["language_code"] = u.language_code
         if u.first_name:
             meta["first_name"] = u.first_name
         if u.username:
             meta["username"] = u.username
-        tasks = await fetch_pending(self.cfg, self.bot_id, u.id, meta or None)
+        premium = getattr(u, "is_premium", None)
+        if premium is not None:
+            meta["is_premium"] = bool(premium)
+        return meta or None
+
+    def _task_rows(self, tasks: list[dict], done_ids: set[str]) -> list[list[InlineKeyboardButton]]:
+        rows = []
+        for t in tasks:
+            tid = str(t.get("id") or "").strip()
+            if not tid or tid in done_ids:
+                continue
+            url = str(t.get("url") or t.get("link") or "")
+            if not url.startswith("http"):
+                continue
+            title = str(t.get("title") or "Выполнить")[:40]
+            rows.append([InlineKeyboardButton(text=f"📢 {title}", url=url)])
+        return rows
+
+    async def render_list(self, u: User, *, checking: bool = False) -> tuple[str, InlineKeyboardMarkup | None]:
+        """Task list for the «🚀 Boostly» section. Available to the owner as well."""
+        now = time.time()
+        tasks = await fetch_pending(self.cfg, self.bot_id, u.id, self.user_meta(u))
+        for t in tasks:
+            tid = str(t.get("id") or "").strip()
+            if not tid:
+                continue
+            url = str(t.get("url") or t.get("link") or "")
+            self.db.exec(
+                "INSERT OR IGNORE INTO boostly_shown(user_id, task_id, shown_at, task_url) VALUES(?,?,?,?)",
+                u.id, tid, int(now), url,
+            )
+        done_ids = {r["task_id"] for r in self.db.all("SELECT task_id FROM boostly_done WHERE user_id=?", u.id)}
+        if checking:
+            shown = self.db.all("SELECT task_id FROM boostly_shown WHERE user_id=?", u.id)
+            for row in shown:
+                tid = row["task_id"]
+                if tid in done_ids:
+                    continue
+                ok, _reason = await check_completion(self.cfg, self.bot_id, u.id, tid)
+                if ok:
+                    self.db.exec(
+                        "INSERT OR IGNORE INTO boostly_done(user_id, task_id, created_at, task_url) VALUES(?,?,?,?)",
+                        u.id, tid, int(now), None,
+                    )
+                    done_ids.add(tid)
+        rows = self._task_rows(tasks, done_ids)
+        if not rows:
+            return EMPTY_TEXT, InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data=TASKS_REFRESH_CB)],
+            ])
+        rows.append([
+            InlineKeyboardButton(text="✅ Проверить", callback_data=TASKS_CHECK_CB),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=TASKS_REFRESH_CB),
+        ])
+        return TASKS_TEXT, InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def check(self, u: User, force: bool = False) -> InlineKeyboardMarkup | None:
+        now = time.time()
+        if not force and self._pass_until.get(u.id, 0) > now:
+            return None
+        meta = self.user_meta(u)
+        tasks = await fetch_pending(self.cfg, self.bot_id, u.id, meta)
         conf = _proxy_conf(self.cfg)
         if conf is None:
             reason = _refuse_reason(self.cfg)

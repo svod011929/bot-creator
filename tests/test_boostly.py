@@ -6,13 +6,19 @@ from pathlib import Path
 
 import pytest
 from aiogram.methods import EditMessageText
+from aiogram.types import User
 
-from child.boostly import check_completion, fetch_pending
+from child.boostly import BTN_TASKS, BoostlyGate, check_completion, fetch_pending
 from creator.boostly import BoostlyService, load_hub_key
 from creator.boostly_tasks import (
     BoostlyTasksClient,
     completion_of,
+    is_rewardable,
+    parse_event,
+    parse_event_list,
     pending_tasks,
+    poll_events_once,
+    process_events,
     start_proxy,
     stop_proxy,
 )
@@ -310,3 +316,227 @@ async def test_admin_keys_and_tools_show_boostly(env):  # noqa: F811
     text = session.texts()[-1]
     assert "Ключи интеграций" in text
     assert "Boostly хаб" in text
+
+
+
+def test_paid_false_and_op_are_not_rewardable():
+    assert is_rewardable(status="confirmed") is True
+    assert is_rewardable(status="confirmed", paid=True, op=False) is True
+    assert is_rewardable(status="confirmed", paid=False) is False
+    assert is_rewardable(status="confirmed", op=True) is False
+    assert is_rewardable(status="incomplete") is False
+    result = completion_of({"id": TASK_ID, "status": "confirmed", "paid": False}, TASK_ID)
+    assert result.confirmed is True and result.rewardable is False
+    result = completion_of({"id": TASK_ID, "status": "confirmed", "op": True}, TASK_ID)
+    assert result.confirmed is True and result.rewardable is False
+
+
+def test_parse_events_list_and_wrapper():
+    rows = parse_event_list([
+        {
+            "sequence": 41,
+            "id": "task:task-42",
+            "payload": {
+                "event": "task.confirmed",
+                "task_id": TASK_ID,
+                "telegram_user": USER,
+                "paid": True,
+            },
+        }
+    ])
+    assert len(rows) == 1
+    ev = parse_event(rows[0])
+    assert ev["rewardable"] is True and ev["tg_user_id"] == USER and ev["task_id"] == TASK_ID
+    wrapped = parse_event_list({"events": rows})
+    assert len(wrapped) == 1
+    skipped = parse_event({
+        "sequence": 42,
+        "id": "task:task-42:op",
+        "payload": {"event": "task.confirmed", "task_id": TASK_ID, "telegram_user": USER, "op": True},
+    })
+    assert skipped["rewardable"] is False
+
+
+@pytest.mark.asyncio
+async def test_proxy_does_not_credit_paid_false_onboarding(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+    before = int(db.user(OWNER)["balance"])
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        return {"id": TASK_ID, "status": "confirmed", "paid": False}, "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    runner = await start_proxy(cfg, db)
+    try:
+        Supervisor(db, cfg).write_files(bot_id)
+        child_cfg = json.loads((cfg.bots_dir / str(bot_id) / "config.json").read_text(encoding="utf-8"))
+        ok, reason = await check_completion(child_cfg, bot_id, USER, TASK_ID)
+        assert ok is True and reason == "confirmed"
+        assert int(db.user(OWNER)["balance"]) == before
+        assert db.boostly_already_credited(bot_id, USER, TASK_ID) is False
+    finally:
+        await stop_proxy(runner, cfg)
+
+
+@pytest.mark.asyncio
+async def test_events_credit_once_and_dedup_with_check(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+    before = int(db.user(OWNER)["balance"])
+    db.boostly_remember_shown(bot_id, USER, [TASK_ID])
+
+    event = {
+        "sequence": 7,
+        "id": "task:task-42",
+        "payload": {"event": "task.confirmed", "task_id": TASK_ID, "telegram_user": USER},
+    }
+    first = process_events(db, cfg, [event])
+    assert first["credited"] == 1
+    assert int(db.user(OWNER)["balance"]) == before + 50
+    # Repeat event does not pay again.
+    again = process_events(db, cfg, [event])
+    assert again["credited"] == 0
+    assert int(db.user(OWNER)["balance"]) == before + 50
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        return {"id": TASK_ID, "status": "confirmed"}, "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    runner = await start_proxy(cfg, db)
+    try:
+        Supervisor(db, cfg).write_files(bot_id)
+        child_cfg = json.loads((cfg.bots_dir / str(bot_id) / "config.json").read_text(encoding="utf-8"))
+        ok, _reason = await check_completion(child_cfg, bot_id, USER, TASK_ID)
+        assert ok is True
+        assert int(db.user(OWNER)["balance"]) == before + 50
+    finally:
+        await stop_proxy(runner, cfg)
+
+
+@pytest.mark.asyncio
+async def test_check_then_event_does_not_double_credit(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+    before = int(db.user(OWNER)["balance"])
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        return {"id": TASK_ID, "status": "confirmed"}, "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    runner = await start_proxy(cfg, db)
+    try:
+        Supervisor(db, cfg).write_files(bot_id)
+        child_cfg = json.loads((cfg.bots_dir / str(bot_id) / "config.json").read_text(encoding="utf-8"))
+        ok, _reason = await check_completion(child_cfg, bot_id, USER, TASK_ID)
+        assert ok is True
+        assert int(db.user(OWNER)["balance"]) == before + 50
+    finally:
+        await stop_proxy(runner, cfg)
+
+    event = {
+        "sequence": 9,
+        "id": "task:task-42-b",
+        "payload": {"event": "task.confirmed", "task_id": TASK_ID, "telegram_user": USER},
+    }
+    result = process_events(db, cfg, [event])
+    assert result["credited"] == 0
+    assert int(db.user(OWNER)["balance"]) == before + 50
+
+
+@pytest.mark.asyncio
+async def test_events_poll_parses_list_response_and_advances_cursor(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+    db.boostly_remember_shown(bot_id, USER, [TASK_ID])
+    before = int(db.user(OWNER)["balance"])
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        assert method == "GET" and path == "/v1/events"
+        assert params == {"after_sequence": 0}
+        return [{
+            "sequence": 11,
+            "id": "task:task-42",
+            "payload": {"event": "task.confirmed", "task_id": TASK_ID, "telegram_user": USER},
+        }], "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    result = await poll_events_once(cfg, db)
+    assert result["ok"] is True and result["credited"] == 1 and result["cursor"] == 11
+    assert db.boostly_event_cursor() == 11
+    assert int(db.user(OWNER)["balance"]) == before + 50
+
+
+@pytest.mark.asyncio
+async def test_fetch_pending_sends_profile_and_remembers_shown(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+    seen = []
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        seen.append((method, path, params))
+        return {"tasks": [PENDING], "onboarding_required": False}, "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    runner = await start_proxy(cfg, db)
+    try:
+        Supervisor(db, cfg).write_files(bot_id)
+        child_cfg = json.loads((cfg.bots_dir / str(bot_id) / "config.json").read_text(encoding="utf-8"))
+        tasks = await fetch_pending(
+            child_cfg, bot_id, USER,
+            {"language_code": "ru", "first_name": "Ann", "username": "ann", "is_premium": True},
+        )
+        assert tasks and tasks[0]["id"] == TASK_ID
+        assert seen and seen[0][1] == "/v1/tasks"
+        params = seen[0][2]
+        assert params["telegram_user_id"] == USER
+        assert params["language_code"] == "ru"
+        assert params["is_premium"] is True
+        assert db.boostly_shown_bots(USER, TASK_ID) == [bot_id]
+    finally:
+        await stop_proxy(runner, cfg)
+
+
+@pytest.mark.asyncio
+async def test_owner_can_open_boostly_task_section(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, boostly_hub_api_key=HUB)
+    db = DB(cfg.db_path)
+    bot_id = _bot(db)
+    db.boostly_apply(bot_id, OWNER, 0)
+    db.boostly_set(bot_id, status="approved")
+
+    async def fake_request(self, method, path, *, params=None, body=None):
+        return {"tasks": [PENDING]}, "ok"
+
+    monkeypatch.setattr(BoostlyTasksClient, "_request", fake_request)
+    runner = await start_proxy(cfg, db)
+    try:
+        Supervisor(db, cfg).write_files(bot_id)
+        child_cfg = json.loads((cfg.bots_dir / str(bot_id) / "config.json").read_text(encoding="utf-8"))
+        from child.db import ChildDB
+        child_db = ChildDB(tmp_path / "child.db")
+        gate = BoostlyGate(child_cfg, child_db, bot_id)
+        user = User(id=OWNER, is_bot=False, first_name="Owner", username="alice", language_code="ru")
+        text, kb = await gate.render_list(user)
+        assert "Boostly" in text
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        assert any(b.startswith("📢 ") for b in labels)
+        assert "✅ Проверить" in labels and "🔄 Обновить" in labels
+        assert BTN_TASKS == "🚀 Boostly"
+    finally:
+        await stop_proxy(runner, cfg)
