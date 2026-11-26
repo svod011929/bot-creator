@@ -2,6 +2,7 @@ from aiogram import Router
 
 from creator.handlers import (
     admin,
+    boostly,
     bot_list,
     bot_setup,
     bot_stats,
@@ -39,6 +40,7 @@ def build_routers() -> list[Router]:
         sponsor_sources.router,
         integration_keys.router,
         contest.router,
+        boostly.router,
         admin.router,
         tgrass.router,
         piarflow.router,

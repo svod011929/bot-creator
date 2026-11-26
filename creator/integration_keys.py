@@ -44,6 +44,8 @@ SPECS: tuple[KeySpec, ...] = (
             probe="mgram_partner"),
     KeySpec("mgram_hub", "MGRAM хаб-бот (задания)", "MGRAM_HUB_API_KEY", "mgram_hub_api_key",
             legacy_name="mgram_hub.json"),
+    KeySpec("boostly_hub", "Boostly хаб (трансляция ОП)", "BOOSTLY_HUB_API_KEY", "boostly_hub_api_key",
+            legacy_name="boostly_hub.json"),
     KeySpec("tgrass_hub", "TGrass хаб (трансляция ОП)", "TGRASS_HUB_API_KEY", "tgrass_hub_api_key",
             kind="sponsor", sponsor_provider="tgrass"),
     KeySpec("piarflow_hub", "PiarFlow хаб (трансляция ОП)", "PIARFLOW_HUB_API_KEY", "piarflow_hub_api_key",

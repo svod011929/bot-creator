@@ -76,6 +76,7 @@ def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False)
     if b["template"] in {"clicker", "refbot", "microtasks"}:
         rows.append([btn("💳 LavePay выплаты", f"olp:{i}")])
     rows.append([btn("📢 Заработок на рассылках", f"b:{i}:mgram")])
+    rows.append([btn("🚀 Boostly", f"b:{i}:bl")])
     rows.append([
         btn("⚙️ Настройки", f"b:{i}:set"),
         btn("🚫 С продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell"),

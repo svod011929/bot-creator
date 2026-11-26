@@ -248,6 +248,34 @@ CREATE TABLE IF NOT EXISTS contests (
     status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS boostly_bots (
+    bot_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    applicant_id INTEGER,
+    users_at_apply INTEGER,
+    applied_at INTEGER,
+    decided_at INTEGER,
+    decided_by INTEGER,
+    error TEXT,
+    FOREIGN KEY (bot_id) REFERENCES bots(id)
+);
+CREATE TABLE IF NOT EXISTS boostly_ops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER NOT NULL,
+    tg_user_id INTEGER NOT NULL,
+    task_id TEXT NOT NULL,
+    owner_id INTEGER NOT NULL,
+    reward_kop INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (bot_id, tg_user_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS ix_boostly_ops_bot ON boostly_ops(bot_id, created_at);
+CREATE TABLE IF NOT EXISTS boostly_task_proxy (
+    bot_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (bot_id) REFERENCES bots(id)
+);
 """
 
 
@@ -292,6 +320,7 @@ class DB:
         self._ensure_bot_broadcasts()
         self._ensure_mgram_task_proxy()
         self._ensure_contests()
+        self._ensure_boostly()
         if self.kv_get("created_at") is None:
             self.kv_set("created_at", str(now()))
         if self.kv_get("currency") != "rub":
@@ -1184,6 +1213,153 @@ class DB:
         self._ensure_contests()
         with self.tx() as c:
             c.execute("UPDATE contests SET status='ended' WHERE id=?", (int(cid),))
+
+
+    def _ensure_boostly(self) -> None:
+        """Additive Boostly tables for existing databases. No hub key is stored here."""
+        with self._lock:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_bots (
+                    bot_id INTEGER PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    applicant_id INTEGER,
+                    users_at_apply INTEGER,
+                    applied_at INTEGER,
+                    decided_at INTEGER,
+                    decided_by INTEGER,
+                    error TEXT,
+                    FOREIGN KEY (bot_id) REFERENCES bots(id)
+                )"""
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_ops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_id INTEGER NOT NULL,
+                    tg_user_id INTEGER NOT NULL,
+                    task_id TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    reward_kop INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE (bot_id, tg_user_id, task_id)
+                )"""
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_boostly_ops_bot ON boostly_ops(bot_id, created_at)"
+            )
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS boostly_task_proxy (
+                    bot_id INTEGER PRIMARY KEY,
+                    token TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (bot_id) REFERENCES bots(id)
+                )"""
+            )
+
+    def boostly(self, bot_id: int):
+        return self.one("SELECT * FROM boostly_bots WHERE bot_id=?", bot_id)
+
+    def boostly_approved(self, bot_id: int) -> bool:
+        row = self.one("SELECT status FROM boostly_bots WHERE bot_id=?", bot_id)
+        return bool(row) and row["status"] == "approved"
+
+    def boostly_apply(self, bot_id: int, applicant_id: int, users: int) -> bool:
+        with self.tx() as c:
+            row = c.execute("SELECT status FROM boostly_bots WHERE bot_id=?", (bot_id,)).fetchone()
+            if row and row["status"] in ("pending", "approved"):
+                return False
+            if row:
+                c.execute(
+                    "UPDATE boostly_bots SET status='pending', applicant_id=?, users_at_apply=?, "
+                    "error=NULL, applied_at=?, decided_at=NULL, decided_by=NULL WHERE bot_id=?",
+                    (applicant_id, users, now(), bot_id),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO boostly_bots(bot_id, applicant_id, users_at_apply, applied_at, status) "
+                    "VALUES(?,?,?,?,?)",
+                    (bot_id, applicant_id, users, now(), "pending"),
+                )
+            return True
+
+    _BOOSTLY_FIELDS = frozenset({"status", "error", "decided_at", "decided_by", "applicant_id", "users_at_apply"})
+
+    def boostly_set(self, bot_id: int, **fields) -> None:
+        """Update allowlisted columns only. Never stores a hub key or api_key."""
+        fields = {k: v for k, v in fields.items() if k in self._BOOSTLY_FIELDS}
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self.conn.execute(f"UPDATE boostly_bots SET {cols} WHERE bot_id=?", (*fields.values(), bot_id))
+
+    def boostly_credit(self, bot_id: int, tg_user_id: int, task_id: str, reward_kop: int,
+                       ts: int | None = None) -> bool:
+        """Atomically credit the owner once per (bot, user, task). Integer kopecks only."""
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return False
+        with self.tx() as c:
+            b = c.execute("SELECT owner_id FROM bots WHERE id=?", (bot_id,)).fetchone()
+            if not b:
+                return False
+            owner = b["owner_id"]
+            reward_kop = max(0, int(reward_kop))
+            cur = c.execute(
+                "INSERT OR IGNORE INTO boostly_ops(bot_id,tg_user_id,task_id,owner_id,reward_kop,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (bot_id, tg_user_id, task_id, owner, reward_kop, ts or now()),
+            )
+            if cur.rowcount != 1:
+                return False
+            if reward_kop > 0:
+                self._change_balance(c, owner, reward_kop, "boostly", f"Boostly: задание в боте ID {bot_id}")
+            return True
+
+    def boostly_already_credited(self, bot_id: int, tg_user_id: int, task_id: str) -> bool:
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return False
+        row = self.one(
+            "SELECT 1 FROM boostly_ops WHERE bot_id=? AND tg_user_id=? AND task_id=?",
+            bot_id, tg_user_id, task_id,
+        )
+        return row is not None
+
+    def boostly_stats(self, bot_id: int, since: int = 0) -> tuple[int, int]:
+        row = self.one(
+            "SELECT COUNT(*), COALESCE(SUM(reward_kop),0) FROM boostly_ops WHERE bot_id=? AND created_at>=?",
+            bot_id, since,
+        )
+        return int(row[0]), int(row[1])
+
+    def boostly_proxy_token(self, bot_id: int) -> str:
+        """Return the existing local proxy token, or create one. Never stores the hub key."""
+        self._ensure_boostly()
+        row = self.one("SELECT token FROM boostly_task_proxy WHERE bot_id=?", bot_id)
+        if row and row["token"]:
+            return row["token"]
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            try:
+                self.conn.execute(
+                    "INSERT INTO boostly_task_proxy(bot_id, token, created_at) VALUES(?,?,?)",
+                    (bot_id, token, now()),
+                )
+            except sqlite3.IntegrityError:
+                row = self.conn.execute(
+                    "SELECT token FROM boostly_task_proxy WHERE bot_id=?", (bot_id,)
+                ).fetchone()
+                if row and row["token"]:
+                    return row["token"]
+                raise
+        return token
+
+    def boostly_proxy_bot(self, token: str) -> int | None:
+        token = (token or "").strip()
+        if not token:
+            return None
+        row = self.one("SELECT bot_id FROM boostly_task_proxy WHERE token=?", token)
+        return int(row["bot_id"]) if row else None
 
     def idea_add(self, user_id: int, text: str) -> int:
         """Insert an idea in the same transactional helper used by voting."""

@@ -52,7 +52,7 @@ def read(path: Path, now: int | None = None) -> dict | str:
 
 
 def op_income(db, bot_id: int, now_ts: int | None = None) -> dict:
-    """Доход с ОП (TGrass + PiarFlow) из базы конструктора. Возвращает число заданий и копейки."""
+    """Доход с ОП (TGrass + PiarFlow + Boostly) из базы конструктора. Возвращает число заданий и копейки."""
     from creator.db import day_start
 
     now_ts = int(time.time()) if now_ts is None else now_ts
@@ -60,12 +60,16 @@ def op_income(db, bot_id: int, now_ts: int | None = None) -> dict:
     week = now_ts - 7 * DAY
 
     def _sum(since: int) -> tuple[int, int]:
-        try:
-            t_count, t_kop = db.tgrass_stats(bot_id, since)
-            p_count, p_kop = db.pf_stats(bot_id, since)
-            return int(t_count) + int(p_count), int(t_kop) + int(p_kop)
-        except (TypeError, ValueError, ArithmeticError, AttributeError):
-            return 0, 0
+        def _one(fn) -> tuple[int, int]:
+            try:
+                count, kop = fn(bot_id, since)
+                return int(count), int(kop)
+            except (TypeError, ValueError, ArithmeticError, AttributeError):
+                return 0, 0
+        t_count, t_kop = _one(db.tgrass_stats)
+        p_count, p_kop = _one(db.pf_stats)
+        b_count, b_kop = _one(getattr(db, "boostly_stats", lambda *a: (0, 0)))
+        return t_count + p_count + b_count, t_kop + p_kop + b_kop
 
     d_count, d_kop = _sum(day)
     w_count, w_kop = _sum(week)

@@ -28,6 +28,8 @@ from aiogram.types import (
 )
 
 from child import templates
+from child.boostly import CHECK_CB as BL_CHECK_CB
+from child.boostly import BoostlyGate
 from child.db import ChildDB, fmt
 from child.engagement import Engagement, private_observation
 from child.files import read_config, read_settings, write_setting
@@ -139,6 +141,12 @@ class ChildApp:
             PiarFlowGate(pf_key, self.db, str(self.cfg.get("piarflow_base_url") or "https://piarflow.com/v1"))
             if pf_key else None
         )
+        bl_sock = str(self.cfg.get("boostly_proxy") or "").strip()
+        bl_token = str(self.cfg.get("boostly_proxy_token") or "").strip()
+        has_bl_proxy = bool(bl_sock and bl_token)
+        self.boostly: BoostlyGate | None = (
+            BoostlyGate(self.cfg, self.db, int(self.cfg.get("bot_id") or 0)) if has_bl_proxy else None
+        )
 
     async def tgrass_gate(self, user, force: bool = False) -> InlineKeyboardMarkup | None:
         """Спонсорские задания (TGrass, затем PiarFlow): None — пропускаем, иначе клавиатура со спонсорами."""
@@ -146,10 +154,10 @@ class ChildApp:
         if self.is_owner(user.id):
             slog.log_skip(log, "gate", "owner")
             return None
-        if self.tgrass is None and self.piarflow is None:
+        if self.tgrass is None and self.piarflow is None and self.boostly is None:
             slog.log_skip(log, "gate", "no_key")
             return None
-        for name, gate in (("TGrass", self.tgrass), ("PiarFlow", self.piarflow)):
+        for name, gate in (("TGrass", self.tgrass), ("PiarFlow", self.piarflow), ("Boostly", self.boostly)):
             if gate is None:
                 continue
             try:
@@ -162,7 +170,7 @@ class ChildApp:
         return None
 
     async def close_gates(self) -> None:
-        for gate in (self.tgrass, self.piarflow):
+        for gate in (self.tgrass, self.piarflow, self.boostly):
             if gate is not None:
                 await gate.close()
 
@@ -266,7 +274,7 @@ class GateMiddleware(BaseMiddleware):
         # Every other message and button still goes through the sponsor check below.
         if isinstance(event, Message) and (event.text or "").startswith("/start"):
             return await handler(event, data)
-        if isinstance(event, CallbackQuery) and event.data in ("chk_sub", TG_CHECK_CB, PF_CHECK_CB):
+        if isinstance(event, CallbackQuery) and event.data in ("chk_sub", TG_CHECK_CB, PF_CHECK_CB, BL_CHECK_CB):
             return await handler(event, data)
         tg_kb = await self.app.tgrass_gate(user)
         if tg_kb is not None:
@@ -402,7 +410,7 @@ def build_core_router(app: ChildApp) -> Router:
         await cb.message.delete()
         await after_gate(cb.message, u.id)
 
-    @r.callback_query(F.data.in_({TG_CHECK_CB, PF_CHECK_CB}))
+    @r.callback_query(F.data.in_({TG_CHECK_CB, PF_CHECK_CB, BL_CHECK_CB}))
     async def check_tgrass(cb: CallbackQuery) -> None:
         u = cb.from_user
         tg_kb = await app.tgrass_gate(u, force=True)

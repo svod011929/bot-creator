@@ -81,6 +81,7 @@ async def run() -> None:
     webhook_runner = None
     unsub_runner = None
     mgram_proxy_runner = None
+    boostly_proxy_runner = None
     from creator.integration_keys import value
     lave_key = value(cfg, "lavepay")
     if lave_key:
@@ -111,6 +112,9 @@ async def run() -> None:
            notify_owner_strict=notify_strict)
     if cfg.webhook_listen_port:
         unsub_runner = await ctx.unsub.start(cfg.webhook_listen_host, cfg.webhook_listen_port)
+    from creator.boostly import BoostlyService
+    from creator.boostly_tasks import start_proxy as start_boostly_proxy
+    from creator.boostly_tasks import stop_proxy as stop_boostly_proxy
     from creator.mgram_hub import ensure_hub_key
     from creator.mgram_tasks import start_proxy, stop_proxy
     hub_status = await ensure_hub_key(
@@ -120,6 +124,8 @@ async def run() -> None:
     )
     log.info("MGRAM hub ensure: %s", hub_status)
     mgram_proxy_runner = await start_proxy(cfg, db)
+    ctx.boostly = BoostlyService(ctx)
+    boostly_proxy_runner = await start_boostly_proxy(cfg, db)
     from creator.integrations import ensure_services, wait_and_sync
     ensure_services(ctx)
     for network in ("tgrass", "piarflow"):
@@ -141,6 +147,7 @@ async def run() -> None:
         if unsub_runner:
             await unsub_runner.cleanup()
         await stop_proxy(mgram_proxy_runner, cfg)
+        await stop_boostly_proxy(boostly_proxy_runner, cfg)
         payouts = getattr(ctx, "payouts", None) or getattr(getattr(ctx, "lave", None), "payouts", None)
         if payouts is not None:
             payouts.close()
