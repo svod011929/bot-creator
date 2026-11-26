@@ -54,6 +54,9 @@ async def begin(w, session):
 async def test_card_entry_edit_preview_confirm_apply_and_safe_repeated_apply(runtime, session):
     w = runtime
     await w.feed(cb_update(OWNER, f"b:{w.id}:open"))
+    # Оформление теперь в группе «Оформление и контент»
+    assert f"b:{w.id}:g:content" in callbacks(last_screen(session))
+    await w.feed(cb_update(OWNER, f"b:{w.id}:g:content"))
     assert w.cb("home") in callbacks(last_screen(session))
     original = (w.path / "settings.json").read_bytes()
     await begin(w, session)

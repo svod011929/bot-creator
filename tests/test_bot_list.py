@@ -116,7 +116,7 @@ async def test_dispatcher_page_search_filter_and_card_return(listing):
     assert "Страница 2 из 3" in last(w)
     assert f"b:{w.ids[10]}:open" in {b.callback_data for row in keyboard(w) for b in row}
     await w.feed(cb_update(OWNER, f"b:{w.ids[10]}:open"))
-    assert "Бот ID" in last(w)
+    assert "Бот #" in last(w)
     await w.feed(cb_update(OWNER, "mybots"))
     assert "Страница 2 из 3" in last(w)
     await w.feed(cb_update(OWNER, callback(w, ":search")))
@@ -163,7 +163,7 @@ async def test_legacy_open_cancel_own_editor_preserved(listing, active):
     await w.state.set_state(active)
     await w.state.set_data({"bot_id": w.ids[0], "template": "clicker"})
     await w.feed(cb_update(OWNER, f"b:{w.ids[0]}:open"))
-    assert await w.state.get_state() is None and "Бот ID" in last(w)
+    assert await w.state.get_state() is None and "Бот #" in last(w)
 
 
 async def test_old_owner_search_and_card_after_transfer_or_delete(listing):

@@ -227,6 +227,8 @@ def add_done(ctx, bot_id, rows):
 async def test_apply_approve_credit_disable(penv):
     ctx, feed, session, api, bot_id = penv
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
+    assert "💰 Заработок" in kb_texts(last(session))
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
     assert "💸 Доп заработок" in kb_texts(last(session))
     await feed(cb_update(OWNER, f"b:{bot_id}:tg"))  # только PiarFlow — сразу его экран
     screen = last(session)

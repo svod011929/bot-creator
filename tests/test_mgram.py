@@ -33,7 +33,12 @@ async def test_mgram_not_configured_is_graceful(env):  # noqa: F811
     session.requests.clear()
     await feed(cb_update(OWNER, f"b:{bot_id}:open"))
     card = [m for m in session.requests if getattr(m, "reply_markup", None)][-1]
-    assert ("📢 Заработок на рассылках", f"b:{bot_id}:mgram") in kb(card)
+    # Кнопка теперь в группе «Заработок»
+    assert "💰 Заработок" in [t for t, _ in kb(card)]
+    session.requests.clear()
+    await feed(cb_update(OWNER, f"b:{bot_id}:g:earn"))
+    earn = [m for m in session.requests if getattr(m, "reply_markup", None)][-1]
+    assert ("📢 Заработок на рассылках", f"b:{bot_id}:mgram") in kb(earn)
     session.requests.clear()
     await feed(cb_update(OWNER, f"b:{bot_id}:mgram"))
     screen = session.of(EditMessageText)[-1]
@@ -163,12 +168,13 @@ def test_load_config_reads_partner_key_from_env(monkeypatch, tmp_path):
 
 
 def test_bot_card_includes_mgram_button():
-    from creator.keyboards import bot_card_kb
+    from creator.keyboards import bot_card_group_kb, bot_card_kb
 
-    kb_markup = bot_card_kb(
-        {"id": 4, "template": "clicker", "desired": 1, "status": "running", "sale_price": None},
-        False,
-    )
+    b = {"id": 4, "template": "clicker", "desired": 1, "status": "running", "sale_price": None}
+    kb_markup = bot_card_kb(b, False)
     texts = [b.text for row in kb_markup.inline_keyboard for b in row]
-    assert "📢 Заработок на рассылках" in texts
-    assert "💳 LavePay выплаты" in texts
+    assert "💰 Заработок" in texts  # группа
+    earn = bot_card_group_kb(b, "earn", False)
+    earn_texts = [x.text for row in earn.inline_keyboard for x in row]
+    assert "📢 Заработок на рассылках" in earn_texts
+    assert "💳 LavePay выплаты" in earn_texts

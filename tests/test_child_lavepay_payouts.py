@@ -474,17 +474,20 @@ async def test_clicker_without_flag_stays_manual(tmp_path, bot, session):
 
 def test_starbot_has_no_lavepay_settings_or_card_button():
     from child import templates
-    from creator.keyboards import bot_card_kb
+    from creator.keyboards import bot_card_group_kb
     keys = {s.key for s in templates.info("starbot").settings}
     assert "lavepay_payouts" not in keys
-    kb = bot_card_kb({"id": 1, "template": "starbot", "desired": 1, "status": "running", "sale_price": None}, False)
-    texts = [b.text for row in kb.inline_keyboard for b in row]
+    b_star = {"id": 1, "template": "starbot", "desired": 1, "status": "running", "sale_price": None}
+    earn_star = bot_card_group_kb(b_star, "earn", False)
+    texts = [b.text for row in earn_star.inline_keyboard for b in row]
     assert "💳 LavePay выплаты" not in texts
-    kb2 = bot_card_kb({"id": 2, "template": "refbot", "desired": 1, "status": "running", "sale_price": None}, False)
-    texts2 = [b.text for row in kb2.inline_keyboard for b in row]
+    b_ref = {"id": 2, "template": "refbot", "desired": 1, "status": "running", "sale_price": None}
+    earn_ref = bot_card_group_kb(b_ref, "earn", False)
+    texts2 = [b.text for row in earn_ref.inline_keyboard for b in row]
     assert "💳 LavePay выплаты" in texts2
-    kb3 = bot_card_kb({"id": 3, "template": "microtasks", "desired": 1, "status": "running", "sale_price": None}, False)
-    texts3 = [b.text for row in kb3.inline_keyboard for b in row]
+    b_mt = {"id": 3, "template": "microtasks", "desired": 1, "status": "running", "sale_price": None}
+    earn_mt = bot_card_group_kb(b_mt, "earn", False)
+    texts3 = [b.text for row in earn_mt.inline_keyboard for b in row]
     assert "💳 LavePay выплаты" in texts3
 
 
@@ -568,12 +571,20 @@ async def test_owner_payout_instructions_hide_signup_link(env):
     card = [m for m in session.requests if isinstance(m, (SendMessage, EditMessageText))
             and "LavePay выплаты" in (m.text or "")][-1]
     hidden(card.text, "LavePay", "Laveshka")
-    assert card.disable_web_page_preview is True
+    assert _preview_disabled(card)
     session.requests.clear()
     await feed(cb_update(OWNER, f"olp:{bot_id}:key"))
     prompt = session.of(SendMessage)[-1]
     hidden(prompt.text, "Laveshka", "зарегистрируйтесь")
-    assert prompt.disable_web_page_preview is True
+    assert _preview_disabled(prompt)
+
+
+def _preview_disabled(msg) -> bool:
+    opts = getattr(msg, "link_preview_options", None)
+    # Default object has no is_disabled; real LinkPreviewOptions does
+    if opts is not None and hasattr(opts, "is_disabled"):
+        return bool(opts.is_disabled)
+    return getattr(msg, "disable_web_page_preview", None) is True
 
 
 def test_bots_default_parse_mode_is_html():

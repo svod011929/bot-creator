@@ -86,16 +86,14 @@ async def test_card_shows_users_hosting_networks_and_grouped_kb(env):  # noqa: F
 
     rows = kb_rows(card)
     flat = kb_texts(card)
-    assert "🔄 Перезапустить" in flat or "▶️ Запустить" in flat or "⏹ Остановить" in flat
-    assert "🔄 Обновить" not in flat
-    # transfer and delete in last rows (after main), not beside restart
+    # Корневая карточка теперь с группами, не плоская стена
+    assert "⚙️ Управление" in flat
+    assert "💳 Хостинг и VIP" in flat
     assert any("🗑 Удалить" in r for r in rows)
-    assert any("🔁 Передать бота" in r or "🔁 Передать" in r for r in rows)
-    # restart/start row must not contain transfer
-    for r in rows:
-        if "🔄 Перезапустить" in r or "▶️ Запустить" in r or "⏹ Остановить" in r:
-            assert "🔁 Передать бота" not in r and "🔁 Передать" not in r
-            assert "🗑 Удалить" not in r
+    assert any("🔁 Передать" in r for r in rows)
+    assert "🔄 Обновить" not in flat
+    # Старт/стоп теперь в подменю «Управление»
+    assert "🔄 Перезапустить" not in flat and "▶️ Запустить" not in flat and "⏹ Остановить" not in flat
 
 
 async def test_card_users_nd_on_corrupt_db(env):  # noqa: F811
@@ -152,8 +150,34 @@ def test_bot_card_kb_layout_unit():
     kb = bot_card_kb(b, for_sale=False, tgrass=True)
     rows = [[x.text for x in row] for row in kb.inline_keyboard]
     flat = [t for r in rows for t in r]
-    assert "🔄 Перезапустить" in flat
-    assert "🔄 Обновить" not in flat
+    # Уровень 1 компактный: группы + опасные + назад
+    assert "⚙️ Управление" in flat
+    assert "💳 Хостинг и VIP" in flat
+    assert "🎨 Оформление и контент" in flat
+    assert "💰 Заработок" in flat
     assert any("Передать" in t for t in flat)
-    assert rows[-1] == ["⬅️ Назад"]
     assert any("🗑 Удалить" in t for t in flat)
+    assert rows[-1] == ["⬅️ Назад"]
+    # Старые плоские кнопки больше не на корне
+    assert "🔄 Перезапустить" not in flat
+    assert "▶️ Запустить" not in flat
+    # Но доступны через подменю
+    from creator.keyboards import bot_card_group_kb
+    manage = bot_card_group_kb(b, "manage", for_sale=False, tgrass=True)
+    manage_flat = [x.text for row in manage.inline_keyboard for x in row]
+    assert "🔄 Перезапустить" in manage_flat
+    assert "▶️ Запустить" not in manage_flat  # running
+    earn = bot_card_group_kb(b, "earn", for_sale=False, tgrass=True)
+    earn_flat = [x.text for row in earn.inline_keyboard for x in row]
+    assert "🚀 Boostly" in earn_flat
+    assert "📢 Заработок на рассылках" in earn_flat
+    assert "💳 LavePay выплаты" in earn_flat
+    assert "💸 Доп заработок" in earn_flat
+    hosting = bot_card_group_kb(b, "hosting", for_sale=False, tgrass=True)
+    hosting_flat = [x.text for row in hosting.inline_keyboard for x in row]
+    assert "💳 Хостинг" in hosting_flat and "👑 VIP" in hosting_flat
+    content = bot_card_group_kb(b, "content", for_sale=False, tgrass=True)
+    content_flat = [x.text for row in content.inline_keyboard for x in row]
+    assert "🎨 Оформление" in content_flat
+    assert "📈 Активность" in content_flat
+    assert bot_card_group_kb(b, "unknown", for_sale=False) is None

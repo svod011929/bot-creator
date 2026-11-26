@@ -53,41 +53,73 @@ def cancel_kb(back: str = "cancel") -> InlineKeyboardMarkup:
 
 
 def bot_card_kb(b, for_sale: bool, tgrass: bool = False, webhooks: bool = False) -> InlineKeyboardMarkup:
-    """Группы: управление · деньги · контент · опасные действия."""
+    """Компактная карточка: группы 2-го уровня вместо плоской стены кнопок."""
+    i = b["id"]
+
+    # Основные входы (уровень 1) — максимум ~6 рядов
+    rows = [
+        [btn("⚙️ Управление", f"b:{i}:g:manage"),
+         btn("💳 Хостинг и VIP", f"b:{i}:g:hosting")],
+        [btn("🎨 Оформление и контент", f"b:{i}:g:content"),
+         btn("💰 Заработок", f"b:{i}:g:earn")],
+        [btn("📊 Статистика", f"bst:{i}"),
+         btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready")],
+        [btn("⚙️ Настройки", f"b:{i}:set"),
+         btn("🚫 С продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell")],
+    ]
+    # Опасные действия отдельно, одна строка
+    rows.append([btn("🔁 Передать", f"b:{i}:transfer"), btn("🗑 Удалить", f"b:{i}:del")])
+    rows.append([btn("⬅️ Назад", "mybots")])
+    return ikb(*rows)
+
+
+def bot_card_group_kb(b, group: str, for_sale: bool, tgrass: bool = False, webhooks: bool = False) -> InlineKeyboardMarkup | None:
+    """Подменю карточки бота. Возвращает None для неизвестной группы."""
     i = b["id"]
     running = b["desired"] and b["status"] in ("running", "restarting")
     from creator.content import callback
     from creator.engagement import request as activity_request
     from creator.presentation import callback as presentation_callback
 
-    rows = [
-        [btn("⏹ Остановить", f"b:{i}:stop") if running else btn("▶️ Запустить", f"b:{i}:start")],
-    ]
-    if running:
-        rows.append([btn("🔄 Перезапустить", f"b:{i}:restart")])
-    rows += [
-        [btn("📊 Статистика", f"bst:{i}"), btn("📋 Первый запуск", f"setup:{i}:{b['template']}:ready")],
-        [btn("💳 Хостинг", f"b:{i}:host"), btn("👑 VIP", f"b:{i}:vip")],
-        [btn("🎨 Оформление", presentation_callback(i, "home")),
-         btn("📈 Активность", activity_request(i))],
-    ]
-    if b["template"] in {"refbot", "starbot", "clicker"}:
-        rows.append([btn("📚 Контент", callback(b, "home"))])
-    if b["template"] in {"clicker", "refbot", "microtasks"}:
-        rows.append([btn("💳 LavePay выплаты", f"olp:{i}")])
-    rows.append([btn("📢 Заработок на рассылках", f"b:{i}:mgram")])
-    rows.append([btn("🚀 Boostly", f"b:{i}:bl")])
-    rows.append([
-        btn("⚙️ Настройки", f"b:{i}:set"),
-        btn("🚫 С продажи", f"b:{i}:unsell") if for_sale else btn("🛒 Продать", f"b:{i}:sell"),
-    ])
-    if tgrass:
-        rows.append([btn("💸 Доп заработок", f"b:{i}:tg")])
-    if webhooks:
-        rows.append([btn("🔗 Вебхуки", f"b:{i}:wh")])
-    rows += [
-        [btn("💡 Подсказки по карточке", f"b:{i}:tips")],
-        [btn("🔁 Передать", f"b:{i}:transfer"), btn("🗑 Удалить", f"b:{i}:del")],
-        [btn("⬅️ Назад", "mybots")],
-    ]
-    return ikb(*rows)
+    if group == "manage":
+        rows = [
+            [btn("⏹ Остановить", f"b:{i}:stop") if running else btn("▶️ Запустить", f"b:{i}:start")],
+        ]
+        if running:
+            rows.append([btn("🔄 Перезапустить", f"b:{i}:restart")])
+        rows.append([btn("💡 Подсказки", f"b:{i}:tips")])
+        rows.append([btn("⬅️ К карточке", f"b:{i}:open")])
+        return ikb(*rows)
+
+    if group == "hosting":
+        rows = [
+            [btn("💳 Хостинг", f"b:{i}:host"), btn("👑 VIP", f"b:{i}:vip")],
+            [btn("⬅️ К карточке", f"b:{i}:open")],
+        ]
+        return ikb(*rows)
+
+    if group == "content":
+        rows = [
+            [btn("🎨 Оформление", presentation_callback(i, "home")),
+             btn("📈 Активность", activity_request(i))],
+        ]
+        if b["template"] in {"refbot", "starbot", "clicker"}:
+            rows.append([btn("📚 Контент", callback(b, "home"))])
+        rows.append([btn("⬅️ К карточке", f"b:{i}:open")])
+        return ikb(*rows)
+
+    if group == "earn":
+        rows = [
+            [btn("📢 Заработок на рассылках", f"b:{i}:mgram")],
+            [btn("🚀 Boostly", f"b:{i}:bl")],
+        ]
+        if b["template"] in {"clicker", "refbot", "microtasks"}:
+            rows.append([btn("💳 LavePay выплаты", f"olp:{i}")])
+        if tgrass:
+            rows.append([btn("💸 Доп заработок", f"b:{i}:tg")])
+        if webhooks:
+            rows.append([btn("🔗 Вебхуки", f"b:{i}:wh")])
+        rows.append([btn("⬅️ К карточке", f"b:{i}:open")])
+        return ikb(*rows)
+
+    return None
