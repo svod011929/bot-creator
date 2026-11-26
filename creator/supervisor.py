@@ -101,6 +101,11 @@ class Supervisor:
             # Local proxy only: path + per-bot token. The hub/partner keys stay in the constructor.
             payload["mgram_proxy"] = str(sock_path(self.cfg))
             payload["mgram_proxy_token"] = self.db.mgram_proxy_token(bot_id)
+        if self.db.boostly_approved(bot_id):
+            from creator.boostly_tasks import sock_path as boostly_sock
+            # Local proxy only. The Boostly hub key stays in the constructor.
+            payload["boostly_proxy"] = str(boostly_sock(self.cfg))
+            payload["boostly_proxy_token"] = self.db.boostly_proxy_token(bot_id)
         payload.update(child_flags(self.cfg, self.db, bot_id))
         write_config(d, payload)
         return d

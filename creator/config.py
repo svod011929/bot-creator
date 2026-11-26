@@ -28,13 +28,16 @@ PRICE_KEYS = {
     # PiarFlow (Доп заработок)
     "PIARFLOW_REWARD": "PiarFlow: награда владельцу за 1 задание, ₽",
     "PIARFLOW_MIN_USERS": "PiarFlow: минимум пользователей в боте",
+    # Boostly (Доп заработок)
+    "BOOSTLY_REWARD": "Boostly: награда владельцу за 1 задание, ₽",
+    "BOOSTLY_MIN_USERS": "Boostly: минимум пользователей для заявки",
     # Вывод заработанного
     "WITHDRAW_MIN": "Вывод: минимальная сумма, ₽",
     "WITHDRAW_FEE_PERCENT": "Вывод: комиссия, %",
 }
 
 MONEY_KEYS = frozenset({"PRICE_CLICKER", "PRICE_REFBOT", "PRICE_STARBOT", "PRICE_MICROTASKS", "HOSTING_DAY_PRICE", "VIP_PRICE",
-                        "TGRASS_REWARD", "PIARFLOW_REWARD", "WITHDRAW_MIN"})
+                        "TGRASS_REWARD", "PIARFLOW_REWARD", "BOOSTLY_REWARD", "WITHDRAW_MIN"})
 
 PRICE_DEFAULTS = {
     "PRICE_CLICKER": 22500,      # 225 ₽
@@ -51,6 +54,8 @@ PRICE_DEFAULTS = {
     "TGRASS_MIN_USERS": 50,
     "PIARFLOW_REWARD": 50,       # 0,50 ₽ за засчитанное задание
     "PIARFLOW_MIN_USERS": 50,
+    "BOOSTLY_REWARD": 50,        # 0,50 ₽ за подтверждённое задание
+    "BOOSTLY_MIN_USERS": 0,
     "WITHDRAW_MIN": 10000,       # 100 ₽
     "WITHDRAW_FEE_PERCENT": 5,
 }
@@ -107,6 +112,8 @@ class Config:
     piarflow_hub_api_key: str = ""  # API key хаб-бота для режима «трансляция» (или data/piarflow_hub.json)
     tgrass_hub_api_key: str = ""    # auth_token хаб-бота TGrass для «трансляции» (или data/tgrass_hub.json)
     mgram_hub_api_key: str = ""     # Bot API key хаб-бота MGRAM для заданий в microtasks (или data/mgram_hub.json)
+    boostly_hub_api_key: str = ""   # API-ключ площадки Boostly (или data/boostly_hub.json); never given to children
+    boostly_base_url: str = "https://www.boostlyofficial.online"
     webhook_public_base: str = ""   # public origin for dashboard URLs, e.g. https://bnbb.tech
     webhook_listen_host: str = "127.0.0.1"
     webhook_listen_port: int = 0    # 0 — listener off; Caddy should proxy /webhooks/* here
@@ -232,6 +239,8 @@ def load_config(env_file: Path | None = None) -> Config:
         piarflow_hub_api_key=os.environ.get("PIARFLOW_HUB_API_KEY", "").strip(),
         tgrass_hub_api_key=os.environ.get("TGRASS_HUB_API_KEY", "").strip(),
         mgram_hub_api_key=os.environ.get("MGRAM_HUB_API_KEY", "").strip(),
+        boostly_hub_api_key=os.environ.get("BOOSTLY_HUB_API_KEY", "").strip(),
+        boostly_base_url=(os.environ.get("BOOSTLY_BASE_URL", "").strip() or "https://www.boostlyofficial.online").rstrip("/"),
         webhook_public_base=(os.environ.get("WEBHOOK_PUBLIC_BASE", "").strip() or "").rstrip("/"),
         webhook_listen_host=os.environ.get("WEBHOOK_LISTEN_HOST", "").strip() or "127.0.0.1",
         webhook_listen_port=_int("WEBHOOK_LISTEN_PORT", 0),

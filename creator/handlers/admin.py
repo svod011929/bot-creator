@@ -54,6 +54,7 @@ def _group_rows(ctx: Ctx | None, uid: int | None) -> dict[str, list[list]]:
         "tools": [[btn("📜 Журнал", "a:alog:0"), btn("📡 Источники ОП", "src:home")],
                    [btn("💡 Идеи пользователей", "a:ideas")],
                    [btn("🏆 Конкурсы", "contest:view")],
+                   [btn("🚀 Заявки Boostly", "a:bl:list")],
                    [btn("🔄 Перезапустить все боты", "a:restartall")]],
         "settings": [[btn("🔒 Обязательная подписка", "a:set:gate")],
                      [btn("💡 Награда за идеи", "a:set:reward")],
