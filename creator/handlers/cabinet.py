@@ -9,9 +9,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from creator import ops_history, showcase
-from creator.keyboards import BTN_CABINET, BTN_PARTNERS, btn, ikb
+from creator.keyboards import BTN_CABINET, BTN_PARTNERS
 from creator.money import rub
 from creator.services import Ctx
+from creator.ui import btn, grid, ikb, screen, show, with_nav
 
 router = Router(name="cabinet")
 
@@ -27,31 +28,37 @@ KIND_TEXT = {
 def cabinet_text(ctx: Ctx, uid: int) -> str:
     u = ctx.db.user(uid)
     bots = ctx.db.user_bots(uid)
-    return (
-        "💼 <b>Мой кабинет</b>\n\n"
-        f"🆔 ID: <code>{uid}</code>\n"
-        f"📅 С нами с: {time.strftime('%d.%m.%Y', time.localtime(u['created_at']))}\n"
-        f"💰 Баланс: <b>{rub(u['balance'])}</b>\n"
-        f"🤖 Ботов: {len(bots)} (запущено {sum(1 for b in bots if b['status'] == 'running')})\n"
-        f"👥 Рефералов: {ctx.db.referrals_count(uid)}, заработано {rub(u['ref_earned'])}\n\n"
-        "💡 Пополните баланс, чтобы оплачивать хостинг ботов. История операций — ниже."
+    running = sum(1 for b in bots if b["status"] == "running")
+    return screen(
+        "Мой кабинет",
+        f"🆔 ID: <code>{uid}</code>",
+        f"📅 С нами с: {time.strftime('%d.%m.%Y', time.localtime(u['created_at']))}",
+        f"💰 Баланс: <b>{rub(u['balance'])}</b>",
+        f"🤖 Ботов: {len(bots)} (запущено {running})",
+        f"👥 Рефералов: {ctx.db.referrals_count(uid)}, заработано {rub(u['ref_earned'])}",
+        details_lines=["Пополните баланс, чтобы оплачивать хостинг ботов. История операций — ниже."],
     )
 
 
 def cabinet_kb():
-    return ikb([btn("➕ Пополнить баланс", "cab:topup")], [btn("💸 Вывести заработанное", "cab:wd")],
-               [btn("📄 Мои заявки на вывод", "cab:wdl:0")], [btn("📜 История операций", "cab:history")])
+    buttons = [
+        btn("➕ Пополнить баланс", "cab:topup", style="primary"),
+        btn("💸 Вывести заработанное", "cab:wd"),
+        btn("📄 Мои заявки на вывод", "cab:wdl:0"),
+        btn("📜 История операций", "cab:history"),
+    ]
+    return with_nav(grid(buttons, 2))
 
 
 @router.message(F.text == BTN_CABINET)
 async def cabinet(message: Message, ctx: Ctx) -> None:
-    await message.answer(cabinet_text(ctx, message.from_user.id), reply_markup=cabinet_kb())
+    await show(message, cabinet_text(ctx, message.from_user.id), cabinet_kb())
 
 
 @router.callback_query(F.data == "cab:main")
 async def cabinet_cb(cb: CallbackQuery, ctx: Ctx, state: FSMContext) -> None:
     await state.clear()
-    await cb.message.edit_text(cabinet_text(ctx, cb.from_user.id), reply_markup=cabinet_kb())
+    await show(cb, cabinet_text(ctx, cb.from_user.id), cabinet_kb())
     await cb.answer()
 
 
@@ -71,12 +78,14 @@ async def show_history(cb: CallbackQuery, ctx: Ctx, flt: str, number: int) -> No
     rows, total, number = ops_history.page(ctx.db, cb.from_user.id, flt, number)
     pages = max(1, -(-total // ops_history.PAGE))
     title = ops_history.FILTERS[flt][0]
-    lines = [f"📜 <b>История операций</b> · {title}", f"Стр. {number + 1}/{pages} · всего {total}\n"]
+    lines = [f"Стр. {number + 1}/{pages} · всего {total}"]
     for r in rows:
         lines.append(f"№{r['id']} · {ops_history.when(r['created_at'])[:10]} | {signed(r['amount'])} | {kind_text(r['kind'])}")
     if not rows:
         lines.append("Операций пока нет." if flt == "all" else "В этом разделе операций нет.")
-    lines.append("\nНажмите номер, чтобы открыть операцию. Суммы — в рублях баланса конструктора.")
+    hint = "Нажмите номер, чтобы открыть операцию. Суммы — в рублях баланса конструктора."
+    text = screen(f"История операций · {title}", *lines[:6],
+                  details_lines=(lines[6:] + [hint]) if len(lines) > 6 else [hint])
     filters = [btn(("• " if key == flt else "") + name, f"cab:h:{key}:0") for key, (name, _) in ops_history.FILTERS.items()]
     numbers = [btn(f"№{r['id']}", f"cab:tx:{r['id']}:{flt}:{number}") for r in rows]
     nav = []
@@ -84,8 +93,8 @@ async def show_history(cb: CallbackQuery, ctx: Ctx, flt: str, number: int) -> No
         nav.append(btn("⬅️", f"cab:h:{flt}:{number - 1}"))
     if number + 1 < pages:
         nav.append(btn("➡️", f"cab:h:{flt}:{number + 1}"))
-    await cb.message.edit_text("\n".join(lines), reply_markup=ikb(
-        filters[:3], filters[3:], numbers[:5], numbers[5:], nav, [btn("⬅️ В кабинет", "cab:main")]))
+    kb = ikb(*grid(filters, 3), *grid(numbers, 5), nav, [btn("⬅️ В кабинет", "cab:main")])
+    await show(cb, text, kb)
 
 
 @router.callback_query(F.data == "cab:history")

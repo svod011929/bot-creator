@@ -43,6 +43,9 @@ from child.subscription import INVITE_URL, PUBLIC_URL, USERNAME, GateResult, Sub
 from child.tgrass import CHECK_CB as TG_CHECK_CB
 from child.tgrass import TEXT as TG_TEXT
 from child.tgrass import TGrassGate
+from child.ui import btn as ui_btn
+from child.ui import grid, screen, show, with_nav
+from child.ui import ikb as ui_ikb
 
 log = logging.getLogger("child")
 
@@ -562,35 +565,49 @@ async def subscription_redirect(message: Message, app: ChildApp):
 
 
 def admin_kb(app: ChildApp) -> InlineKeyboardMarkup:
-    # Группы: обзор · люди · управление · инструменты конструктора
-    rows = [
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats"),
-         InlineKeyboardButton(text="👤 Пользователи", callback_data="adm:users:0")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm:set"),
-         InlineKeyboardButton(text="💸 Заявки", callback_data="adm:wd")],
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="adm:bc"),
-         InlineKeyboardButton(text="📜 Журнал", callback_data="adm:olog:0")],
+    """Корень админки владельца: четыре группы второго уровня."""
+    buttons = [
+        ui_btn("📊 Обзор", "adm:g:overview"),
+        ui_btn("👥 Люди", "adm:g:people"),
+        ui_btn("💰 Деньги", "adm:g:money"),
+        ui_btn("🛠 Инструменты", "adm:g:tools"),
     ]
-    link = subscription_link(app)
-    if link:
-        rows.extend(link.inline_keyboard)
-    for text, data in getattr(app.template, "ADMIN_BUTTONS", []):
-        rows.append([InlineKeyboardButton(text=text, callback_data=data)])
-    creator = str(app.cfg.get("creator_username") or "")
-    bot_id = app.cfg.get("bot_id")
-    if creator and bot_id:
-        tpl = app.info.key if hasattr(app.info, "key") else ""
-        tool_row = []
-        if tpl == "clicker":
-            tool_row.append(InlineKeyboardButton(text="🎯 События", url=f"https://t.me/{creator}?start=events_{bot_id}"))
-        elif tpl == "refbot":
-            tool_row.append(InlineKeyboardButton(text="🤝 Команды", url=f"https://t.me/{creator}?start=teams_{bot_id}"))
-        elif tpl == "starbot":
-            tool_row.append(InlineKeyboardButton(text="📚 Треки", url=f"https://t.me/{creator}?start=tracks_{bot_id}"))
-        tool_row.append(InlineKeyboardButton(text="🎨 Оформление", url=f"https://t.me/{creator}?start=pres_{bot_id}"))
-        if tool_row:
-            rows.append(tool_row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return with_nav(grid(buttons, 2))
+
+
+def admin_group_kb(app: ChildApp, group: str) -> InlineKeyboardMarkup | None:
+    if group == "overview":
+        rows = [[ui_btn("📊 Статистика", "adm:stats")]]
+        return with_nav(rows, back_data="adm:main")
+    if group == "people":
+        buttons = [ui_btn("👤 Пользователи", "adm:users:0"), ui_btn("📜 Журнал", "adm:olog:0")]
+        return with_nav(grid(buttons, 2), back_data="adm:main")
+    if group == "money":
+        rows = [[ui_btn("💸 Заявки", "adm:wd")]]
+        return with_nav(rows, back_data="adm:main")
+    if group == "tools":
+        buttons = [
+            ui_btn("⚙️ Настройки", "adm:set"),
+            ui_btn("📢 Рассылка", "adm:bc"),
+        ]
+        for text, data in getattr(app.template, "ADMIN_BUTTONS", []):
+            buttons.append(ui_btn(text, data))
+        creator = str(app.cfg.get("creator_username") or "")
+        bot_id = app.cfg.get("bot_id")
+        if creator and bot_id:
+            tpl = app.info.key if hasattr(app.info, "key") else ""
+            if tpl == "clicker":
+                buttons.append(InlineKeyboardButton(text="🎯 События", url=f"https://t.me/{creator}?start=events_{bot_id}"))
+            elif tpl == "refbot":
+                buttons.append(InlineKeyboardButton(text="🤝 Команды", url=f"https://t.me/{creator}?start=teams_{bot_id}"))
+            elif tpl == "starbot":
+                buttons.append(InlineKeyboardButton(text="📚 Треки", url=f"https://t.me/{creator}?start=tracks_{bot_id}"))
+            buttons.append(InlineKeyboardButton(text="🎨 Оформление", url=f"https://t.me/{creator}?start=pres_{bot_id}"))
+        link = subscription_link(app)
+        if link:
+            buttons.extend(link.inline_keyboard[0])
+        return with_nav(grid(buttons, 2), back_data="adm:main")
+    return None
 
 
 def _user_card_text(app, u) -> str:
@@ -598,14 +615,15 @@ def _user_card_text(app, u) -> str:
     pending = app.db.scalar(
         "SELECT COUNT(*) FROM withdrawals WHERE user_id=? AND status='pending'", u["id"]
     ) or 0
-    return (
-        f"👤 <b>{html.escape(u['full_name'] or '')}</b> "
-        f"{('@' + html.escape(u['username'])) if u['username'] else ''}\n"
-        f"ID: <code>{u['id']}</code>\nБаланс: {fmt(u['balance'])}\n"
-        f"Регистрация: {created}\n"
-        f"blocked: {'да' if u['blocked'] else 'нет'}\n"
-        f"Заявок на вывод (ожидают): {pending}\n"
-        f"Статус: {'🚫 забанен' if u['banned'] else '✅ активен'}"
+    uname = f" @{html.escape(u['username'])}" if u["username"] else ""
+    return screen(
+        f"{html.escape(u['full_name'] or 'Пользователь')}{uname}".strip(),
+        f"ID: <code>{u['id']}</code>",
+        f"Баланс: {fmt(u['balance'])}",
+        f"Регистрация: {created}",
+        f"blocked: {'да' if u['blocked'] else 'нет'}",
+        f"Заявок на вывод (ожидают): {pending}",
+        details_lines=[f"Статус: {'🚫 забанен' if u['banned'] else '✅ активен'}"],
     )
 
 def _user_card_kb(u) -> InlineKeyboardMarkup:
@@ -629,7 +647,7 @@ def build_admin_router(app: ChildApp) -> Router:
         await state.clear()
         if message.chat.type == "private" and hasattr(app.template, "pause_forms"):
             app.template.pause_forms(app, message.from_user.id)
-        await message.answer("⚙️ <b>Панель владельца</b>", reply_markup=admin_kb(app))
+        await show(message, screen("Панель владельца"), admin_kb(app))
 
     @r.callback_query(F.data == "adm:stats")
     async def stats(cb: CallbackQuery) -> None:
@@ -637,22 +655,40 @@ def build_admin_router(app: ChildApp) -> Router:
         s = app.db.stats()
         paid = app.db.paid_by_unit()
         lines = [f"• {fmt(total)} {format_unit(unit)}" for unit, _, total in paid]
-        text = (
-            f"📊 <b>Статистика</b>\n\n👥 Пользователей: {s['users']}\n"
-            f"🆕 Сегодня (с 00:00 по времени сервера): {s['today']}\n"
-            f"🚫 Недоступны для рассылки: {s['blocked']}\n⏳ Заявок на вывод: {s['pending']}\n"
-            f"✅ Отмечено выплаченными: {sum(n for _, n, _ in paid)}"
-            + ("\n" + "\n".join(lines) if lines else "")
-            + "\n\n<i>Суммы — по единице, сохранённой в каждой заявке; это ручные отметки, не подтверждение перевода.</i>"
-            + (app.template.admin_stats_extra(app) if hasattr(app.template, "admin_stats_extra") else "")
+        disclaimer = (
+            "Суммы — по единице, сохранённой в каждой заявке; "
+            "это ручные отметки, не подтверждение перевода."
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:main")]])
-        await cb.message.edit_text(text, reply_markup=kb)
+        text = screen(
+            "Статистика",
+            f"👥 Пользователей: {s['users']}",
+            f"🆕 Сегодня (с 00:00 по времени сервера): {s['today']}",
+            f"🚫 Недоступны для рассылки: {s['blocked']}",
+            f"⏳ Заявок на вывод: {s['pending']}",
+            f"✅ Отмечено выплаченными: {sum(n for _, n, _ in paid)}",
+            details_lines=(lines + [disclaimer]) if lines else [disclaimer],
+            expandable=True,
+        )
+        if hasattr(app.template, "admin_stats_extra"):
+            text += "\n" + app.template.admin_stats_extra(app)
+        kb = ui_ikb([ui_btn("⬅️ Назад", "adm:main")])
+        await show(cb, text, kb)
         await cb.answer()
 
     @r.callback_query(F.data == "adm:main")
     async def admin_main(cb: CallbackQuery) -> None:
-        await cb.message.edit_text("⚙️ <b>Панель владельца</b>", reply_markup=admin_kb(app))
+        await show(cb, screen("Панель владельца"), admin_kb(app))
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("adm:g:"))
+    async def admin_group(cb: CallbackQuery) -> None:
+        key = cb.data[6:]
+        kb = admin_group_kb(app, key)
+        if kb is None:
+            await cb.answer("Раздел устарел", show_alert=True)
+            return
+        titles = {"overview": "Обзор", "people": "Люди", "money": "Деньги", "tools": "Инструменты"}
+        await show(cb, screen(f"Панель → {titles.get(key, key)}"), kb)
         await cb.answer()
 
     @r.callback_query(F.data.startswith("adm:users:"))

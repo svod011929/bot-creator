@@ -21,6 +21,7 @@ from creator.money import parse_rub, rub
 from creator.services import Ctx
 from creator.states import Admin
 from creator.tgrass import child_users_for_card
+from creator.ui import screen, show
 
 router = Router(name="admin")
 
@@ -114,11 +115,13 @@ def panel_text(ctx: Ctx) -> str:
     deleted = q("SELECT COUNT(*) FROM bots WHERE deleted=1") or 0
     alive = sum(1 for i in list(ctx.sup.children) if ctx.sup.is_running(i))
     shops = q("SELECT COUNT(*) FROM owner_lavepay_shops") or 0
-    return ("🛠 <b>Админ-панель</b>\n\n"
-            f"Пользователей: {users} (забаненных {banned})\n"
-            f"ботов {bots} · running {running} · error {errors} · удалённых {deleted}\n"
-            f"Процессов: {alive} · магазинов LavePay: {shops}\n"
-            f"<i>Это записанный статус и процессы супервизора, не проверка ответа Telegram.</i>")
+    return screen(
+        "Админ-панель",
+        f"Пользователей: {users} (забаненных {banned})",
+        f"ботов {bots} · running {running} · error {errors} · удалённых {deleted}",
+        f"Процессов: {alive} · магазинов LavePay: {shops}",
+        details_lines=["Это записанный статус и процессы супервизора, не проверка ответа Telegram."],
+    )
 
 
 @router.message(Command("admin"))
@@ -127,8 +130,8 @@ async def panel(message: Message, state: FSMContext, ctx: Ctx) -> None:
     ctx.discard_pending_secrets(message.from_user.id)
     bcb.clear_payload(message.from_user.id)
     await state.clear()
-    await message.answer(panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
-                         reply_markup=panel_kb(ctx, message.from_user.id))
+    await show(message, panel_text(ctx) + "\n\nОтветить пользователю: <code>/reply ID текст</code>",
+               panel_kb(ctx, message.from_user.id))
 
 
 @router.callback_query(F.data.startswith("a:g:"))
@@ -138,7 +141,7 @@ async def panel_group(cb: CallbackQuery, ctx: Ctx) -> None:
     if kb is None:
         await cb.answer("Кнопка устарела", show_alert=True)
         return
-    await cb.message.edit_text(f"🛠 <b>Админ-панель</b> → {GROUP_TITLES[key]}", reply_markup=kb)
+    await show(cb, screen(f"Админ-панель → {GROUP_TITLES[key]}"), kb)
     await cb.answer()
 
 
@@ -147,7 +150,7 @@ async def panel_cb(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     ctx.discard_pending_secrets(cb.from_user.id)
     bcb.clear_payload(cb.from_user.id)
     await state.clear()
-    await cb.message.edit_text(panel_text(ctx), reply_markup=panel_kb(ctx, cb.from_user.id))
+    await show(cb, panel_text(ctx), panel_kb(ctx, cb.from_user.id))
     await cb.answer()
 
 

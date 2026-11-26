@@ -27,9 +27,11 @@ from creator.integration_keys import (
     status_line,
     validate_key,
 )
-from creator.keyboards import btn, ikb
 from creator.services import Ctx
 from creator.sponsor_sources import SourceError
+from creator.ui import NO_PREVIEW, grid, screen, with_nav
+from creator.ui import btn as ui_btn
+from creator.ui import ikb as ui_ikb
 
 router = Router(name="integration_keys")
 TTL, CAP = 600, 128
@@ -72,7 +74,7 @@ def cleanup(ctx: Ctx) -> None:
 
 async def edit(cb: CallbackQuery, text: str, kb) -> None:
     try:
-        await cb.message.edit_text(text, reply_markup=kb)
+        await cb.message.edit_text(text, reply_markup=kb, link_preview_options=NO_PREVIEW)
     except TelegramAPIError:
         pass  # No exception details or candidate secret in logs/fallback messages.
 
@@ -83,12 +85,13 @@ async def discard(state: FSMContext, ctx: Ctx, uid: int) -> None:
 
 
 def home_screen(ctx: Ctx):
-    lines = ["🔑 <b>Ключи интеграций</b>\n", PRIORITY, ""]
+    lines = [PRIORITY]
     for st in all_statuses(ctx.cfg):
         lines.append("• " + status_line(st))
-    rows = [[btn(st.title, f"ik:v:{st.id}")] for st in SPECS]
-    rows.append([btn("⬅️ К настройкам", "a:g:settings")])
-    return "\n".join(lines), ikb(*rows)
+    text = screen("Ключи интеграций", *lines[:5], details_lines=lines[5:] if len(lines) > 5 else None, expandable=True)
+    buttons = [ui_btn(st.title, f"ik:v:{st.id}") for st in SPECS]
+    kb = with_nav(grid(buttons, 2), back_data="a:g:settings")
+    return text, kb
 
 
 def detail_screen(ctx: Ctx, key_id: str):
@@ -96,21 +99,21 @@ def detail_screen(ctx: Ctx, key_id: str):
     from creator.integration_keys import resolve
     try:
         st = resolve(ctx.cfg, key_id)
-        text = f"🔑 <b>{item.title}</b>\n\n{status_line(st)}"
+        text = screen(item.title, status_line(st))
     except KeyErrorSafe:
         st = None
-        text = f"🔑 <b>{item.title}</b>\n\nне удалось прочитать"
+        text = screen(item.title, "не удалось прочитать")
     if not item.editable:
         text += "\n\n" + item.readonly_reason
     elif env_blocked(ctx.cfg, item):
         text += "\n\nКлюч задан на сервере и имеет приоритет. Изменение через бот недоступно."
     rows = []
     if item.editable and not env_blocked(ctx.cfg, item):
-        rows.append([btn("🔑 Задать / заменить ключ", f"ik:edit:{item.id}")])
+        rows.append([ui_btn("🔑 Задать / заменить", f"ik:edit:{item.id}", style="primary")])
         if has_admin_file(ctx.cfg, item):
-            rows.append([btn("🗑 Удалить сохранённый ключ", f"ik:remove:{item.id}")])
-    rows.append([btn("⬅️ К списку ключей", "ik:home")])
-    return text, ikb(*rows)
+            rows.append([ui_btn("🗑 Удалить сохранённый", f"ik:remove:{item.id}", style="danger")])
+    rows.append([ui_btn("⬅️ К списку", "ik:home")])
+    return text, ui_ikb(*rows)
 
 
 @router.callback_query(F.data.startswith("ik:"))
@@ -172,15 +175,15 @@ async def callbacks(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
                 "Введите ключ (8–512 символов: латиница, цифры и _./+=:-), не токен Telegram-бота. "
                 "Затем потребуется подтверждение сохранения."
             )
-            kb = ikb([btn("⬅️ Отмена", f"ik:v:{item.id}")])
+            kb = ui_ikb([ui_btn("⬅️ Отмена", f"ik:v:{item.id}")])
         else:
             text = (
                 f"Удалить сохранённый в админке ключ «{item.title}»? "
                 "Если ключ задан переменной окружения, она по-прежнему будет использоваться. "
                 "Иначе вернётся прежний файл, если он есть. Это не отзыв ключа у провайдера."
             )
-            kb = ikb([btn("🗑 Подтвердить удаление", f"ik:drop:{item.id}:{nonce}")],
-                     [btn("⬅️ Отмена", f"ik:v:{item.id}")])
+            kb = ui_ikb([ui_btn("🗑 Подтвердить удаление", f"ik:drop:{item.id}:{nonce}")],
+                     [ui_btn("⬅️ Отмена", f"ik:v:{item.id}")])
         await edit(cb, text, kb)
         await cb.answer()
         return
@@ -206,7 +209,7 @@ async def callbacks(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
             await discard(state, ctx, uid)
             await edit(cb, "Изменение не выполнено: настройка изменилась или недоступна. "
                        "Откройте ключ заново. Значение в ответе не показывается.",
-                       ikb([btn("⬅️ К ключу", f"ik:v:{key_id}")]))
+                       ui_ikb([ui_btn("⬅️ К ключу", f"ik:v:{key_id}")]))
             await cb.answer()
             return
         ctx.db.log_admin(uid, audit, target=key_id)
@@ -252,8 +255,8 @@ async def key_input(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await message.answer(
         "Сохранить этот ключ? Проверка у провайдера не обязательна для сохранения."
         + extra,
-        reply_markup=ikb([btn("💾 Сохранить", f"ik:save:{pending.key_id}:{pending.nonce}")],
-                         [btn("⬅️ Отмена", f"ik:v:{pending.key_id}")]),
+        reply_markup=ui_ikb([ui_btn("💾 Сохранить", f"ik:save:{pending.key_id}:{pending.nonce}")],
+                         [ui_btn("⬅️ Отмена", f"ik:v:{pending.key_id}")]),
     )
 
 
