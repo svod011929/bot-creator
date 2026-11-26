@@ -3,13 +3,15 @@
 Дочерний бот ходит только на локальный UNIX-сокет с одноразовым прокси-токеном.
 Ключ BOOSTLY_HUB_API_KEY в дочерний процесс не передаётся.
 
-Награда владельцу подтверждается только статусом задания confirmed в ответе
-POST /v1/tasks/{id}/check. Ошибки, таймауты, пустые ответы и исчезнувшие
-задания начислением не считаются. Повторная проверка того же задания
-повторно не начисляет.
+Награда владельцу подтверждается только статусом задания confirmed
+(ответ POST /v1/tasks/{id}/check или событие task.confirmed из GET /v1/events).
+Ошибки, таймауты, пустые ответы, исчезнувшие задания, paid=false и op=true
+начислением не считаются. Повтор той же пары бот+пользователь+задание
+(проверка и событие) повторно не начисляет.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -28,11 +30,15 @@ DEFAULT_BASE = "https://www.boostlyofficial.online"
 SOCK_NAME = "boostly_tasks.sock"
 CONFIRMED = "confirmed"
 REQUEST_TIMEOUT = 10.0
+EVENT_POLL_SECONDS = 30
+
+
 @dataclass(frozen=True)
 class CheckResult:
     confirmed: bool
     reason: str
     status: str = ""
+    rewardable: bool = False
 
 
 def sock_path(cfg) -> Path:
@@ -54,6 +60,29 @@ def _status_of(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _flag(value: Any) -> bool | None:
+    if value is True or value is False:
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def is_rewardable(*, status: str, paid: Any = None, op: Any = None) -> bool:
+    """Owner reward only on confirmed, paid!=false and op!=true."""
+    if _status_of(status) != CONFIRMED:
+        return False
+    if _flag(op) is True:
+        return False
+    if _flag(paid) is False:
+        return False
+    return True
+
+
 def sanitize_task(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -67,6 +96,8 @@ def sanitize_task(raw: Any) -> dict | None:
         "title": title[:200],
         "url": url[:500],
         "status": str(raw.get("status") or "").strip()[:32],
+        "paid": raw.get("paid"),
+        "op": raw.get("op"),
     }
 
 
@@ -84,9 +115,15 @@ def pending_tasks(payload: Any) -> list[dict]:
         if url and not url.startswith("http"):
             continue
         seen.add(task["id"])
-        public = {k: v for k, v in task.items() if k != "status"}
+        public = {k: v for k, v in task.items() if k not in {"status", "paid", "op"}}
+        if raw.get("kind"):
+            public["kind"] = str(raw.get("kind"))[:64]
         out.append(public)
-    return out
+    return pending_flags(payload, out)
+
+
+def pending_flags(payload: Any, tasks: list[dict]) -> list[dict]:
+    return tasks
 
 
 def _unwrap(payload: Any) -> dict | None:
@@ -113,6 +150,10 @@ def _task_rows(payload: Any) -> list:
     return []
 
 
+def _paid_op(source: dict) -> tuple[Any, Any]:
+    return source.get("paid"), source.get("op")
+
+
 def completion_of(payload: Any, task_id: str) -> CheckResult:
     """Positive confirmation only when this task has status=confirmed in a valid payload."""
     wanted = _task_id(task_id)
@@ -124,16 +165,24 @@ def completion_of(payload: Any, task_id: str) -> CheckResult:
     if inner is None:
         return CheckResult(False, "empty")
 
+    def _result(status: str, source: dict, reason: str | None = None) -> CheckResult:
+        confirmed = _status_of(status) == CONFIRMED
+        paid, op = _paid_op(source)
+        return CheckResult(
+            confirmed,
+            reason or (CONFIRMED if confirmed else (status or "pending")),
+            status=_status_of(status) or "",
+            rewardable=is_rewardable(status=status, paid=paid, op=op),
+        )
+
     rows = _task_rows(payload)
     if rows:
         for raw in rows:
             task = sanitize_task(raw)
             if not task or task["id"] != wanted:
                 continue
-            if _status_of(task["status"]) == CONFIRMED:
-                return CheckResult(True, "confirmed", status=CONFIRMED)
             status = _status_of(task["status"]) or "pending"
-            return CheckResult(False, status, status=status)
+            return _result(status, raw, CONFIRMED if status == CONFIRMED else status)
         # The checked task is absent from a non-empty list: not a confirmation.
         return CheckResult(False, "missing")
 
@@ -141,15 +190,81 @@ def completion_of(payload: Any, task_id: str) -> CheckResult:
     listed_id = _task_id(inner.get("id") or inner.get("task_id") or (payload or {}).get("id"))
     has_tasks_field = "tasks" in inner or "tasks" in (payload or {})
     if status == CONFIRMED and listed_id == wanted:
-        return CheckResult(True, "confirmed", status=CONFIRMED)
+        return _result(status, inner)
     if status == CONFIRMED and listed_id is None and not has_tasks_field:
         # Check URL is already scoped to this task_id; a bare confirmed is enough.
-        return CheckResult(True, "confirmed", status=CONFIRMED)
+        return _result(status, inner)
     if has_tasks_field:
         return CheckResult(False, "missing")
     if status:
-        return CheckResult(False, status, status=status)
+        return _result(status, inner, status)
     return CheckResult(False, "empty")
+
+
+def parse_event_list(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("events", "items", "data"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def parse_event(raw: Any) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else raw
+    event_id = str(raw.get("id") or payload.get("id") or "").strip()[:200]
+    event_type = str(payload.get("event") or payload.get("type") or raw.get("event") or "").strip()
+    task_id = _task_id(payload.get("task_id") or payload.get("id") or raw.get("task_id"))
+    user_raw = payload.get("telegram_user")
+    if user_raw is None:
+        user_raw = payload.get("telegram_user_id") or raw.get("telegram_user") or raw.get("telegram_user_id")
+    try:
+        tg_user_id = int(user_raw) if user_raw is not None else None
+    except (TypeError, ValueError):
+        tg_user_id = None
+    sequence = raw.get("sequence")
+    try:
+        sequence = int(sequence) if sequence is not None else None
+    except (TypeError, ValueError):
+        sequence = None
+    if not event_id:
+        if task_id and sequence is not None:
+            event_id = f"{event_type or 'event'}:{task_id}:{sequence}"
+        elif task_id and tg_user_id:
+            event_id = f"{event_type or 'event'}:{task_id}:{tg_user_id}"
+        else:
+            return None
+    paid, op = _paid_op(payload)
+    status = CONFIRMED if event_type == "task.confirmed" else _status_of(payload.get("status"))
+    return {
+        "event_id": event_id,
+        "sequence": sequence,
+        "event_type": event_type,
+        "task_id": task_id,
+        "tg_user_id": tg_user_id,
+        "paid": paid,
+        "op": op,
+        "rewardable": event_type == "task.confirmed" and is_rewardable(
+            status=CONFIRMED, paid=paid, op=op,
+        ),
+        "status": status,
+    }
+
+
+def reward_kop(db, cfg) -> int:
+    raw = db.kv_get("price:BOOSTLY_REWARD")
+    if raw is not None and str(raw).lstrip("-").isdigit():
+        return int(raw)
+    return int((getattr(cfg, "prices", None) or {}).get("BOOSTLY_REWARD") or 50)
+
+
+def credit_owner(db, cfg, bot_id: int, user_id: int, task_id: str) -> bool:
+    """Insert a new owner credit. Returns True only when a new row was written."""
+    return bool(db.boostly_credit(bot_id, user_id, task_id, reward_kop(db, cfg)))
 
 
 class BoostlyTasksClient:
@@ -179,7 +294,7 @@ class BoostlyTasksClient:
             await self._session.close()
 
     async def _request(self, method: str, path: str, *, params: dict | None = None,
-                       body: dict | None = None) -> tuple[dict | None, str]:
+                       body: dict | None = None) -> tuple[Any, str]:
         if not self.enabled:
             return None, "not_configured"
         sess = await self._sess()
@@ -189,21 +304,27 @@ class BoostlyTasksClient:
                     data = await resp.json(content_type=None)
                 except Exception:
                     return None, "empty"
+                if resp.status == 429:
+                    return None, "rate_limited"
                 if resp.status >= 400:
                     return None, "error"
-                return data if isinstance(data, dict) else None, "ok" if isinstance(data, dict) else "empty"
+                if isinstance(data, (dict, list)):
+                    return data, "ok"
+                return None, "empty"
         except TimeoutError:
             return None, "timeout"
         except aiohttp.ClientError:
             return None, "error"
 
     async def fetch_pending(self, user_id: int, meta: dict | None = None) -> tuple[list[dict], str]:
-        params = {"telegram_user_id": int(user_id)}
+        params: dict[str, Any] = {"telegram_user_id": int(user_id)}
         if meta:
             for key in ("language_code", "first_name", "username"):
                 value = meta.get(key)
                 if value:
                     params[key] = str(value)[:64]
+            if meta.get("is_premium") is not None:
+                params["is_premium"] = bool(meta.get("is_premium"))
         data, reason = await self._request("GET", "/v1/tasks", params=params)
         if reason != "ok":
             return [], reason
@@ -219,6 +340,14 @@ class BoostlyTasksClient:
             return CheckResult(False, reason)
         return completion_of(data, tid)
 
+    async def fetch_events(self, after_sequence: int = 0) -> tuple[list[dict], str]:
+        data, reason = await self._request(
+            "GET", "/v1/events", params={"after_sequence": max(0, int(after_sequence))},
+        )
+        if reason != "ok":
+            return [], reason
+        return parse_event_list(data), "ok"
+
 
 STATE = web.AppKey("boostly_state", object)
 
@@ -230,13 +359,19 @@ class ProxyState:
         self.client: BoostlyTasksClient | None = None
 
 
-def _client(state: ProxyState) -> BoostlyTasksClient:
-    key = load_hub_key(state.cfg)
-    api_base = base_url(state.cfg)
-    if state.client is not None and state.client.api_key == key and state.client.api_base == api_base:
-        return state.client
+def _client(state: ProxyState | None, cfg=None) -> BoostlyTasksClient:
+    if state is not None:
+        cfg = state.cfg
+        current = state.client
+    else:
+        current = None
+    key = load_hub_key(cfg)
+    api_base = base_url(cfg)
+    if current is not None and current.api_key == key and current.api_base == api_base:
+        return current
     client = BoostlyTasksClient(key, api_base)
-    state.client = client
+    if state is not None:
+        state.client = client
     return client
 
 
@@ -289,6 +424,7 @@ async def handle_tasks(request: web.Request) -> web.Response:
     tasks, reason = await client.fetch_pending(user_id, meta)
     if reason != "ok":
         return web.json_response({"ok": False, "reason": reason, "tasks": []})
+    state.db.boostly_remember_shown(bot_id, user_id, [str(t.get("id")) for t in tasks if t.get("id")])
     return web.json_response({"ok": True, "tasks": tasks})
 
 
@@ -315,22 +451,89 @@ async def handle_check(request: web.Request) -> web.Response:
     result = await client.check(user_id, task_id)
     credited = False
     if result.confirmed:
-        raw = state.db.kv_get("price:BOOSTLY_REWARD")
-        if raw is not None and str(raw).lstrip("-").isdigit():
-            reward = int(raw)
-        else:
-            reward = int((state.cfg.prices or {}).get("BOOSTLY_REWARD") or 50)
-        credited = bool(state.db.boostly_credit(bot_id, user_id, task_id, reward))
-        # Already credited is still a confirmation for the child gate.
-        credited = credited or state.db.boostly_already_credited(bot_id, user_id, task_id)
+        state.db.boostly_remember_shown(bot_id, user_id, [task_id])
+        if result.rewardable:
+            credit_owner(state.db, state.cfg, bot_id, user_id, task_id)
+            credited = state.db.boostly_already_credited(bot_id, user_id, task_id)
     payload = {
         "ok": True,
         "confirmed": result.confirmed,
         "reason": result.reason,
         "task_id": task_id,
-        "credited": bool(credited) if result.confirmed else False,
+        "credited": bool(credited) if result.confirmed and result.rewardable else False,
+        "rewardable": result.rewardable,
     }
     return web.json_response(payload)
+
+
+def process_events(db, cfg, rows: list[dict]) -> dict:
+    """Apply a batch of Boostly events. Idempotent on event id and on (bot, user, task)."""
+    processed = 0
+    credited = 0
+    cursor = db.boostly_event_cursor()
+    max_seq = cursor
+    for raw in rows:
+        event = parse_event(raw)
+        if event is None:
+            continue
+        if event["sequence"] is not None:
+            max_seq = max(max_seq, event["sequence"])
+        if not db.boostly_record_event(
+            event["event_id"], event["sequence"], event["event_type"],
+            event["task_id"], event["tg_user_id"],
+        ):
+            processed += 1
+            continue
+        processed += 1
+        if not event["rewardable"] or event["tg_user_id"] is None or not event["task_id"]:
+            continue
+        bot_ids = db.boostly_shown_bots(event["tg_user_id"], event["task_id"])
+        for bot_id in bot_ids:
+            if not db.boostly_approved(bot_id):
+                continue
+            if credit_owner(db, cfg, bot_id, event["tg_user_id"], event["task_id"]):
+                credited += 1
+    if max_seq > cursor:
+        db.boostly_set_event_cursor(max_seq)
+    return {"processed": processed, "credited": credited, "cursor": max_seq}
+
+
+async def poll_events_once(cfg, db) -> dict:
+    client = BoostlyTasksClient(load_hub_key(cfg), base_url(cfg))
+    try:
+        if not client.enabled:
+            return {"ok": False, "reason": "not_configured"}
+        rows, reason = await client.fetch_events(db.boostly_event_cursor())
+        if reason != "ok":
+            return {"ok": False, "reason": reason}
+        result = process_events(db, cfg, rows)
+        result["ok"] = True
+        result["fetched"] = len(rows)
+        return result
+    finally:
+        await client.close()
+
+
+async def events_loop(cfg, db) -> None:
+    """Poll GET /v1/events every 30s so a user who never presses «Проверить» can still be credited."""
+    while True:
+        try:
+            result = await poll_events_once(cfg, db)
+            if result.get("fetched") or result.get("credited"):
+                log.info(
+                    "boostly events poll fetched=%s processed=%s credited=%s cursor=%s",
+                    result.get("fetched") or 0,
+                    result.get("processed") or 0,
+                    result.get("credited") or 0,
+                    result.get("cursor"),
+                )
+            elif not result.get("ok") and result.get("reason") not in {"not_configured"}:
+                log.warning("boostly events poll failed: %s", result.get("reason"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — no key material in logs
+            log.exception("boostly events poll failed")
+        await asyncio.sleep(EVENT_POLL_SECONDS)
 
 
 def build_app(cfg, db) -> web.Application:

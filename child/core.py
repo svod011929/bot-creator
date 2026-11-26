@@ -28,7 +28,10 @@ from aiogram.types import (
 )
 
 from child import templates
+from child.boostly import BTN_TASKS as BTN_BOOSTLY
 from child.boostly import CHECK_CB as BL_CHECK_CB
+from child.boostly import TASKS_CHECK_CB as BL_TASKS_CHECK_CB
+from child.boostly import TASKS_REFRESH_CB as BL_TASKS_REFRESH_CB
 from child.boostly import BoostlyGate
 from child.db import ChildDB, fmt
 from child.engagement import Engagement, private_observation
@@ -223,6 +226,8 @@ class ChildApp:
     def menu(self, uid: int) -> ReplyKeyboardMarkup:
         rows = [list(r) for r in self.template.menu_rows(self)]
         rows.append([BTN_PROFILE, BTN_WITHDRAW])
+        if self.boostly is not None:
+            rows.append([BTN_BOOSTLY])
         if self.is_owner(uid):
             rows.append([BTN_ADMIN])
         return ReplyKeyboardMarkup(
@@ -429,6 +434,29 @@ def build_core_router(app: ChildApp) -> Router:
             pass
         result = await app.gate_result(cb.bot, u.id)
         await enter_after_check(cb.message, u.id, result)
+
+    @r.message(F.text == BTN_BOOSTLY)
+    async def boostly_tasks(message: Message) -> None:
+        if app.boostly is None:
+            return
+        text, kb = await app.boostly.render_list(message.from_user)
+        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
+    @r.callback_query(F.data.in_({BL_TASKS_CHECK_CB, BL_TASKS_REFRESH_CB}))
+    async def boostly_tasks_action(cb: CallbackQuery) -> None:
+        if app.boostly is None:
+            await cb.answer()
+            return
+        checking = cb.data == BL_TASKS_CHECK_CB
+        text, kb = await app.boostly.render_list(cb.from_user, checking=checking)
+        if checking:
+            await cb.answer("✅ Проверено" if "пока нет" not in text else "Заданий пока нет")
+        else:
+            await cb.answer()
+        try:
+            await cb.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        except TelegramBadRequest:
+            pass
 
     @r.message(Command("profile"))
     @r.message(F.text == BTN_PROFILE)
