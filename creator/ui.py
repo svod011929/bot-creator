@@ -45,7 +45,9 @@ async def show(target, text: str, kb: InlineKeyboardMarkup | ReplyKeyboardMarkup
     if isinstance(target, CallbackQuery):
         try:
             await target.message.edit_text(text, reply_markup=kb, link_preview_options=NO_PREVIEW)
-        except TelegramBadRequest:
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return
             await target.message.answer(text, reply_markup=kb, link_preview_options=NO_PREVIEW)
     else:
         await target.answer(text, reply_markup=kb, link_preview_options=NO_PREVIEW)

@@ -71,12 +71,15 @@ async def test_missing_and_broken_databases_are_not_zero(env):  # noqa: F811
     if path.exists():
         path.unlink()
     await feed(cb_update(OWNER, f"bst:{bot_id}"))
-    assert "Данных пока нет" in last_edit(session).text
+    missing = last_edit(session).text
+    assert "Данных пока нет" in missing
+    assert "Обычно она появляется после первого запуска" in missing
     assert not path.exists()  # opening stats never creates the database
     path.write_bytes(b"not a database" * 100)
     await feed(cb_update(OWNER, f"bst:{bot_id}"))
     t = last_edit(session).text
     assert "Не удалось прочитать" in t and "Пользователей всего: 0" not in t
+    assert "это не значит, что пользователей нет" in t
     path.unlink()
     import sqlite3
     c = sqlite3.connect(path)
