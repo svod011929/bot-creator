@@ -12,6 +12,7 @@ from creator import presentation_views as views
 from creator.content import ContentError, decode
 from creator.presentation import PresentationError, open_presentation
 from creator.states import PresentationInput
+from creator.ui import NO_PREVIEW
 
 router = Router(name="presentation")
 ERRORS = (PresentationError, ContentError)
@@ -57,15 +58,16 @@ def perform(studio, action, args):
 
 async def deliver(cb, screen):
     try:
-        await cb.message.edit_text(screen[0], reply_markup=screen[1], disable_web_page_preview=True)
+        await cb.message.edit_text(screen[0], reply_markup=screen[1], link_preview_options=NO_PREVIEW)
         return True
     except TelegramBadRequest as exc:
         if "message is not modified" in exc.message.lower():
             return True
+        await cb.answer("Экран не отправлен. Откройте оформление снова: черновик сохранён.", show_alert=True)
+        return False
     except TelegramAPIError:
-        pass
-    await cb.answer("Экран не отправлен. Откройте оформление снова: черновик сохранён.", show_alert=True)
-    return False
+        await cb.answer("Экран не отправлен. Откройте оформление снова: черновик сохранён.", show_alert=True)
+        return False
 
 
 @router.callback_query(F.data.startswith("brand:"))

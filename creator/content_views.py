@@ -14,6 +14,7 @@ from child import star_views as star
 from creator.bot_setup import TOKEN_LIKE
 from creator.content import ContentError, callback, encode
 from creator.keyboards import btn, ikb
+from creator.ui import screen
 
 
 def e(value, limit=1000):
@@ -59,32 +60,31 @@ def bounded(text):
 
 def home(content):
     row = content.row
-    text = f"📚 <b>Контент · бот {row['id']}</b>\n"
+    heading = f"Контент · бот #{row['id']}"
+    main = []
+    det = []
     rows = []
     if content.engine is None:
-        text += (
-            "Каталог ещё не подготовлен. Можно создать стартовые материалы и затем редактировать их здесь.\n"
-            "Это не запускает бот и не оплачивает хостинг."
-        )
+        main.append("Каталог ещё не подготовлен. Можно создать стартовые материалы и затем редактировать их здесь.")
+        main.append("Это не запускает бот и не оплачивает хостинг.")
         if content.code == "t":
-            text += "\nМаршруты собираются из опубликованных карточек. Сначала подготовьте каталог карточек."
+            main.append("Маршруты собираются из опубликованных карточек. Сначала подготовьте каталог карточек.")
         if content.code != "t" or (content.db and content.db.one("SELECT 1 FROM sqlite_master WHERE name='star_cards'")):
             rows.append([btn("📚 Подготовить каталог", content_callback(content, "prepare"))])
     else:
         table = {"r": "ref_campaigns", "s": "star_cards", "c": "clicker_events", "t": "star_tracks"}[content.code]
         counts = {r[0]: r[1] for r in content.db.all(f"SELECT status,COUNT(*) FROM {table} GROUP BY status")}
-        text += {
+        kind = {
             "r": "🚀 Кампании реферального клуба",
             "s": "🌌 Карточки созвездий",
             "c": "🎉 События кликера",
             "t": "🧭 Тематические маршруты",
         }[content.code]
-        text += (
-            f"\nЧерновиков: {counts.get('draft', 0)} · опубликовано: {counts.get('active', 0)}"
-            f" · на паузе: {counts.get('paused', 0)}\n\n"
-            "Создайте материал, проверьте предпросмотр и сохраните черновик. Публикация подтверждается отдельно.\n"
-            "Каталог общий с дочерним ботом; форма ввода в креаторе сохраняется отдельно."
-        )
+        main.append(kind)
+        main.append(f"Черновиков: {counts.get('draft', 0)} · опубликовано: {counts.get('active', 0)} "
+                    f"· на паузе: {counts.get('paused', 0)}")
+        det.append("Создайте материал, проверьте предпросмотр и сохраните черновик. Публикация подтверждается отдельно.")
+        det.append("Каталог общий с дочерним ботом; форма ввода в креаторе сохраняется отдельно.")
         rows += [
             [btn("📋 Каталог", content_callback(content, "admin:0")), btn("➕ Создать", content_callback(content, "new"))],
             [btn("📅 Календарь", content_callback(content, "calendar:0"))],
@@ -94,15 +94,13 @@ def home(content):
         if content.code == "s":
             rows.append([btn("🧭 Тематические маршруты", callback(row, "home", code="t"))])
         if content.form_get():
-            text += "\n\n📝 В креаторе есть незавершённая форма."
+            main.append("📝 В креаторе есть незавершённая форма.")
             rows.append([btn("📝 Продолжить форму", content_callback(content, "resume"))])
-        text += (
-            "\n\nИгровые награды и денежный баланс учитываются отдельно. "
-            "Публикация не отправляет рассылку. Статус процесса и доставка Telegram здесь не проверяются."
-        )
+        det.append("Игровые награды и денежный баланс учитываются отдельно. Публикация не отправляет рассылку.")
     if content.code == "t":
         rows.append([btn("🌌 Каталог карточек", callback(row, "home", code="s"))])
     rows += [[btn("⬅️ Все боты с контентом", "content:all:0")], [btn("🤖 Карточка бота", f"b:{row['id']}:open")]]
+    text = screen(heading, *main, details_lines=det if det else None, expandable=True)
     return bounded(text), ikb(*rows)
 
 

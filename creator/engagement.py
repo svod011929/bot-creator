@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from child.engagement import STEPS, TZ
 from creator.content import ContentError, _guard, decode, encode
 from creator.keyboards import btn, ikb
+from creator.ui import screen
 
 TABLES = {"engagement_meta", "engagement_people", "engagement_activity", "engagement_events"}
 
@@ -121,54 +122,47 @@ def ratio(value, total):
 
 
 def render(bot_id, data, *, section="overview", days=30):
-    text = f"📈 <b>Активность · бот {bot_id}</b>\n"
+    heading = f"Активность · бот #{bot_id}"
     status = data.get("status")
+    main = []
+    det = []
     if status in {"missing", "not_started"}:
-        text += (
-            "\nНаблюдений пока нет. Сбор начинается при работе дочернего бота с новым пакетом. "
-            "Старые действия задним числом не добавляются."
-        )
+        main.append("Наблюдений пока нет. Сбор начинается при работе дочернего бота с новым пакетом. "
+                    "Старые действия задним числом не добавляются.")
     elif status != "ok":
-        text += "\nДанные сейчас недоступны. Это не означает отсутствие участников."
+        main.append("Данные сейчас недоступны. Это не означает отсутствие участников.")
     else:
         since = datetime.fromtimestamp(data["started_at"], TZ).strftime("%d.%m.%Y %H:%M")
-        text += f"Наблюдения с {since} МСК.\n"
+        main.append(f"Наблюдения с {since} МСК.")
         if section != "retention":
-            text += f"Период: {data['since']} — {data['until']} (МСК).\n"
+            main.append(f"Период: {data['since']} — {data['until']} (МСК).")
         if section == "overview":
             active = data["active"]
-            text += (
-                f"\n👥 Активны сегодня: <b>{active[1]}</b>\n"
-                f"За 7 календарных дней: {active[7]} · за 30: {active[30]}\n\n"
-                f"Впервые наблюдались за период: {data['observed']}\n"
-                f"Из них зарегистрировались при наблюдаемом /start: {data['registered']}\n\n"
-                "Активность — личный /start, допущенные взаимодействия и собственные игровые действия. "
-                "Владелец бота не учитывается. Пассивная награда за друга не создаёт визит."
-            )
+            main.extend((
+                f"👥 Активны сегодня: <b>{active[1]}</b>",
+                f"За 7 календарных дней: {active[7]} · за 30: {active[30]}",
+                f"Впервые наблюдались за период: {data['observed']}",
+                f"Из них зарегистрировались при наблюдаемом /start: {data['registered']}",
+            ))
+            det.append("Активность — личный /start, допущенные взаимодействия и собственные игровые действия. "
+                       "Владелец бота не учитывается. Пассивная награда за друга не создаёт визит.")
         elif section == "steps":
-            text += f"\n<b>Ключевые шаги</b>\nСреди {data['observed']} участников, впервые наблюдаемых в выбранном периоде:\n"
-            text += "\n".join(
-                f"• {html.escape(title)}: {value} · {ratio(value, data['observed'])}" for title, value in data["steps"]
-            )
-            text += "\n\nДоля показывает охват шага среди этих участников. Шаги могут проходиться в разном порядке."
+            main.append(f"Ключевые шаги среди {data['observed']} участников:")
+            det.extend(f"• {html.escape(title)}: {value} · {ratio(value, data['observed'])}" for title, value in data["steps"])
+            det.append("Доля показывает охват шага среди этих участников. Шаги могут проходиться в разном порядке.")
         else:
-            text += "\n<b>Возвращения D1 / D7</b>\nКогорты первого наблюдаемого дня за последние 30 дней.\n"
+            main.append("Возвращения D1 / D7")
             for lag in (1, 7):
                 r = data["retention"][lag]
-                text += (
-                    f"\nD{lag}: {r['returned']}/{r['eligible']} · {ratio(r['returned'], r['eligible'])}"
-                    if r["eligible"]
-                    else f"\nD{lag}: пока нет созревших когорт"
+                main.append(
+                    f"D{lag}: {r['returned']}/{r['eligible']} · {ratio(r['returned'], r['eligible'])}"
+                    if r["eligible"] else f"D{lag}: пока нет созревших когорт"
                 )
-            text += (
-                "\n\nD1 — взаимодействие ровно на следующий календарный день; D7 — ровно через семь дней. "
-                "Текущий незакрытый день проверки в знаменатель не включается. "
-                "Участники, зарегистрированные раньше установки, входят по первому наблюдаемому дню."
-            )
-        text += (
-            "\n\n<i>Считаются локальные наблюдения. Доставка ответов Telegram и доход здесь не измеряются. "
-            "При сбоях сбора данные могут быть неполными.</i>"
-        )
+            det.append("D1 — взаимодействие ровно на следующий календарный день; D7 — ровно через семь дней. "
+                       "Текущий незакрытый день проверки в знаменатель не включается.")
+        det.append("Считаются локальные наблюдения. Доставка ответов Telegram и доход здесь не измеряются. "
+                   "При сбоях сбора данные могут быть неполными.")
+    text = screen(heading, *main, details_lines=det if det else None, expandable=True)
     keyboard = ikb(
         [
             btn("Обзор", request(bot_id, "overview", days)),

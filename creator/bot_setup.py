@@ -14,6 +14,7 @@ from child import templates
 from child.subscription import INVITE_URL, PUBLIC_URL, parse_channel
 from creator.keyboards import btn, ikb, url_btn
 from creator.services import Ctx
+from creator.ui import screen
 
 APPEARANCE = frozenset({"welcome", "currency", "about", "adventure_title", "adventure_intro", "club_title", "club_intro",
                         "sky_title", "sky_intro"})
@@ -144,12 +145,13 @@ def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, Inlin
     info = templates.info(row["template"])
     snap = load_snapshot(ctx, row)
     heading = "Первый запуск" if action == "ready" else "Настройки бота"
-    lines = [f"<b>{heading} · бот ID {row['id']}</b>", f"Шаблон: {html.escape(info.title)}"]
+    main = [f"Шаблон: {html.escape(info.title)}"]
+    det = []
     rows = []
     if action == "group":
-        lines.append("\nОформление" if arg == "appearance" else "\nНаграды и вывод")
+        main.append("Оформление" if arg == "appearance" else "Награды и вывод")
         for st in group_settings(info, arg):
-            lines.append(f"• {html.escape(st.label)}: {field_text(row, snap, st)}")
+            det.append(f"• {html.escape(st.label)}: {field_text(row, snap, st)}")
             if snap.editable:
                 rows.append([btn(st.label, callback(row, "edit:" + st.key))])
         rows.append([btn("⬅️ Все настройки", callback(row, "settings"))])
@@ -159,9 +161,8 @@ def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, Inlin
             process = "запущен" if ctx.sup.is_running(row["id"]) else "не запущен"
             status = {"running": "запущен", "stopped": "остановлен", "restarting": "перезапускается",
                       "error": "ошибка"}.get(row["status"], "неизвестно")
-            lines.extend((
-                "",
-                "<b>Чек-лист первого запуска</b>",
+            det.extend((
+                "Чек-лист первого запуска",
                 f"1. Процесс: {process}",
                 f"2. Состояние: {status}",
                 "3. Конфигурация: " + ("в порядке" if snap.config_ok else "требует внимания"),
@@ -175,28 +176,28 @@ def view(ctx: Ctx, row, action: str, arg: str | None = None) -> tuple[str, Inlin
             if url:
                 rows.append([url_btn("🚀 Открыть бота", url)])
         if snap.values is None:
-            lines.append("Сохранённые настройки недоступны или не подтверждены.")
+            det.append("Сохранённые настройки недоступны или не подтверждены.")
         for key, label in (("welcome", "Приветствие"), ("currency", "Единица баланса")):
             setting = info.setting(key)
             if setting:
-                lines.append(f"{label}: {field_text(row, snap, setting)}")
+                det.append(f"{label}: {field_text(row, snap, setting)}")
                 if action == "ready" and snap.editable:
                     rows.append([btn(label, callback(row, "edit:" + key))])
-        lines.append("Канал: " + _channel_text(snap))
+        det.append("Канал: " + _channel_text(snap))
         if action == "settings":
             rows.extend(([btn("Оформление", callback(row, "group:appearance"))],
                          [btn("Награды и вывод", callback(row, "group:rules"))]))
         rows.append([btn("Обязательная подписка", callback(row, "channel"))])
         if action == "ready":
-            lines.extend(("", DISCLAIMER))
+            det.append(DISCLAIMER)
             rows.append([btn("Все настройки", callback(row, "settings"))])
         else:
             rows.append([btn("Первый запуск", callback(row, "ready"))])
     if snap.editable:
         rows.append([btn("🎨 Сценарий и оформление", presentation_callback(row["id"], "home"))])
     rows.append([btn("⬅️ К карточке", callback(row, "card"))])
-    text = "\n".join(lines)
-    visible = html.unescape(re.sub(r"</?b>", "", text))
+    text = screen(f"{heading} · бот #{row['id']}", *main, details_lines=det if det else None, expandable=True)
+    visible = html.unescape(re.sub(r"</?b>|</?blockquote[^>]*>", "", text))
     if len(visible.encode("utf-16-le")) // 2 > 4096:
         raise ValueError("View too long")
     return text, ikb(*rows)
