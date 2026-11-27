@@ -18,6 +18,7 @@ from creator.money import parse_rub, rub
 from creator.services import Ctx
 from creator.states import BotEdit
 from creator.tgrass import child_users_for_card
+from creator.ui import screen
 
 router = Router(name="mybots")
 
@@ -266,9 +267,12 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
                                f"b:{bot_id}:hbal:{d}"))
                 rows.append(row)
         rows.append([btn("⬅️ Назад", f"b:{bot_id}:open")])
-        await show(cb, f"💳 <b>Хостинг бота ID {bot_id}</b>\n\nБаланс: {rub(b['hosting_balance'])}\n"
-                       f"Списание: {rub(day)} в сутки, пока бот запущен.\n"
-                       "Когда баланс закончится, бот будет остановлен.", ikb(*rows))
+        await show(cb, screen(
+            f"Хостинг бота #{bot_id}",
+            f"Баланс: {rub(b['hosting_balance'])}",
+            f"Списание: {rub(day)} в сутки, пока бот запущен.",
+            "Когда баланс закончится, бот будет остановлен.",
+        ), ikb(*rows))
 
     elif action == "hbal":
         days = int(args[0])
@@ -293,12 +297,15 @@ async def bot_action(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
             await cb.answer("👑 VIP уже активен", show_alert=True)
             return
         price = ctx.price("VIP_PRICE")
-        await show(cb, f"👑 <b>VIP для бота ID {bot_id}</b>\n\n• Убирает подпись «Бот создан в @{ctx.bot_username}»\n"
-                       f"• Приоритетная поддержка\n\nЦена: {rub(price)} навсегда",
-                   ikb([btn(f"💳 Оплатить {rub(price)} (LavePay)", f"lp:v:{bot_id}")]
-                       if ctx.lave is not None and ctx.lave.enabled and price > 0 else [],
-                       [btn("💼 С баланса", f"b:{bot_id}:vbal")],
-                       [btn("⬅️ Назад", f"b:{bot_id}:open")]))
+        await show(cb, screen(
+            f"VIP для бота #{bot_id}",
+            f"• Убирает подпись «Бот создан в @{ctx.bot_username}»",
+            "• Приоритетная поддержка",
+            f"Цена: {rub(price)} навсегда",
+        ), ikb([btn(f"💳 Оплатить {rub(price)} (LavePay)", f"lp:v:{bot_id}")]
+               if ctx.lave is not None and ctx.lave.enabled and price > 0 else [],
+               [btn("💼 С баланса", f"b:{bot_id}:vbal")],
+               [btn("⬅️ Назад", f"b:{bot_id}:open")]))
 
     elif action == "vbal":
         if b["vip"]:

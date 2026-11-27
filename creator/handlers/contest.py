@@ -9,6 +9,7 @@ from creator.contest import leaderboard_text
 from creator.keyboards import btn, cancel_kb, ikb
 from creator.services import Ctx
 from creator.states import Admin
+from creator.ui import show
 
 router = Router(name="contest")
 
@@ -27,7 +28,7 @@ def contest_kb(is_admin: bool = False) -> object:
 async def view(cb: CallbackQuery, ctx: Ctx) -> None:
     text = leaderboard_text(ctx, cb.from_user.id)
     is_admin = ctx.is_admin(cb.from_user.id)
-    await cb.message.edit_text(text, reply_markup=contest_kb(is_admin))
+    await show(cb, text, contest_kb(is_admin))
     await cb.answer()
 
 

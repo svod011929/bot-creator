@@ -5,7 +5,6 @@ import asyncio
 import re
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -13,6 +12,7 @@ from creator.bot_stats import op_income, read, render
 from creator.engagement import request as activity_request
 from creator.keyboards import btn, ikb
 from creator.services import Ctx
+from creator.ui import show
 
 router = Router(name="bot_stats")
 REQUEST = re.compile(r"bst:([1-9][0-9]{0,18})")
@@ -48,15 +48,8 @@ async def open_stats(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         await cb.answer(UNAVAILABLE, show_alert=True)
         return
     text = render(bot_id, latest["username"], data, op)
-    try:
-        await cb.message.edit_text(text, reply_markup=ikb([btn("📈 Активность и возвращения", activity_request(bot_id))],
-                                                          [btn("🔄 Обновить", f"bst:{bot_id}")],
-                                                          [btn("⬅️ К боту", f"b:{bot_id}:open")]))
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in exc.message.lower():
-            await cb.answer("Не удалось открыть экран. Откройте «Мои боты» заново.", show_alert=True)
-            return
-    except TelegramAPIError:
-        await cb.answer("Не удалось открыть экран. Откройте «Мои боты» заново.", show_alert=True)
-        return
+    kb = ikb([btn("📈 Активность и возвращения", activity_request(bot_id))],
+             [btn("🔄 Обновить", f"bst:{bot_id}")],
+             [btn("⬅️ К боту", f"b:{bot_id}:open")])
+    await show(cb, text, kb)
     await cb.answer()

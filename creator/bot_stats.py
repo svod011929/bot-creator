@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from creator.money import rub
+from creator.ui import screen
 
 DAY = 86400
 MISSING, ERROR = "missing", "error"
@@ -89,17 +90,13 @@ NOTE = ("<i>Окна считаются от текущего момента. «
 
 
 def render(bot_id: int, username: str | None, data: dict | str, op: dict | None = None) -> str:
-    head = f"📊 <b>Статистика бота @{html.escape(username or '—')}</b> (ID {bot_id})\n"
+    head = f"Статистика бота @{html.escape(username or '—')} (#{bot_id})"
     if data == MISSING:
-        return (
-            head + "\nДанных пока нет: бот ещё не создал свою базу. "
-            "Обычно она появляется после первого запуска и первого пользователя."
-        )
+        return screen(head, "Данных пока нет: бот ещё не создал свою базу. "
+                            "Обычно она появляется после первого запуска и первого пользователя.")
     if data == ERROR or not isinstance(data, dict):
-        return (
-            head + "\nНе удалось прочитать данные бота. Попробуйте позже — это не значит, что пользователей нет. "
-            "Если ошибка повторяется, напишите в поддержку."
-        )
+        return screen(head, "Не удалось прочитать данные бота. Попробуйте позже — это не значит, что пользователей нет. "
+                            "Если ошибка повторяется, напишите в поддержку.")
     total, d1, d7, d30, refs, blocked = data["users"]
     active = data.get("active")
     tasks, done, wd = data["tasks"], data["done"], data["withdrawals"]
@@ -109,32 +106,29 @@ def render(bot_id: int, username: str | None, data: dict | str, op: dict | None 
                else f"на рассмотрении {wd[0]} · отмечено выплаченными {wd[1]} · отклонено {wd[2]}")
     active_line = "нет данных" if active is None else str(active)
 
+    tip = "Совет: если пользователей мало — проверьте оформление, первый шаг и реферальную ссылку внутри бота."
+    main = [
+        f"👥 Пользователей всего: {total}",
+        f"Активных в базе: {active_line}",
+        f"Новых за последние 24 ч — {d1} · 7 дней — {d7} · 30 дней — {d30}",
+        f"Пришли по реферальной ссылке: {refs}",
+        f"Отмечены недоступными при рассылке: {blocked}",
+    ]
+    det = []
     if op:
         dc, dk = op["day"]
         wc, wk = op["week"]
         ac, ak = op["all"]
-        op_block = (
-            f"💰 <b>Доход с ОП</b>\n"
-            f"• Сегодня: {rub(dk)} ({dc} заданий)\n"
-            f"• За 7 дней: {rub(wk)} ({wc} заданий)\n"
-            f"• Всего: {rub(ak)} ({ac} заданий)\n\n"
-        )
+        det.append("💰 Доход с ОП")
+        det.append(f"• Сегодня: {rub(dk)} ({dc} заданий)")
+        det.append(f"• За 7 дней: {rub(wk)} ({wc} заданий)")
+        det.append(f"• Всего: {rub(ak)} ({ac} заданий)")
     else:
-        op_block = (
-            "💰 <b>Доход с ОП</b>\n"
-            "• Сегодня: нет данных\n"
-            "• За 7 дней: нет данных\n\n"
-        )
-
-    tip = "\n💡 Совет: если пользователей мало — проверьте оформление, первый шаг и реферальную ссылку внутри бота."
-    return (head + "Сводка по базе бота на момент открытия.\n\n"
-            f"👥 <b>Пользователи</b>\n"
-            f"• Пользователей всего: {total}\n"
-            f"• Активных в базе: {active_line}\n"
-            f"• Новых за последние 24 ч — {d1} · 7 дней — {d7} · 30 дней — {d30}\n"
-            f"• Пришли по реферальной ссылке: {refs}\n"
-            f"• Отмечены недоступными при рассылке: {blocked}\n\n"
-            + op_block
-            + f"📋 <b>Свои задания</b>: {tasks_line}\n"
-            f"💸 <b>Заявки на вывод</b>: {wd_line}\n\n"
-            + NOTE + tip)
+        det.append("💰 Доход с ОП")
+        det.append("• Сегодня: нет данных")
+        det.append("• За 7 дней: нет данных")
+    det.append(f"📋 Свои задания: {tasks_line}")
+    det.append(f"💸 Заявки на вывод: {wd_line}")
+    det.append(NOTE)
+    det.append(tip)
+    return screen(head, *main, details_lines=det, expandable=True)

@@ -11,6 +11,8 @@ from aiogram.types import CallbackQuery, Message
 from creator.keyboards import btn, cancel_kb, ikb
 from creator.money import rub
 from creator.services import Ctx
+from creator.ui import btn as ui_btn
+from creator.ui import screen, show
 
 router = Router(name="ideas")
 
@@ -36,24 +38,20 @@ class IdeaForm(StatesGroup):
 @router.message(F.text == "💡 Идеи")
 async def ideas_home(event: Message | CallbackQuery, ctx: Ctx) -> None:
     items = ctx.db.idea_list(8)
-    lines = ["💡 <b>Идеи по развитию конструктора</b>\n"]
-    if not items:
-        lines.append("Пока нет идей. Будьте первым!")
-    else:
-        for it in items:
-            status = {"new": "🆕", "accepted": "✅", "done": "🎉"}.get(it["status"], "•")
-            lines.append(f"{status} #{it['id']} · {it['votes']} голосов\n{html.escape(it['text'][:120])}")
-    text = "\n\n".join(lines)
-    rows = [[btn("➕ Предложить идею", "ideas:new")]]
+    main = ["Пока нет идей. Будьте первым!"] if not items else []
+    det = []
+    for it in items:
+        status = {"new": "🆕", "accepted": "✅", "done": "🎉"}.get(it["status"], "•")
+        det.append(f"{status} #{it['id']} · {it['votes']} голосов\n{html.escape(it['text'][:120])}")
+    text = screen("Идеи по развитию конструктора", *main, details_lines=det if det else None, expandable=True)
+    rows = [[ui_btn("➕ Предложить идею", "ideas:new", style="primary")]]
     for it in items[:5]:
         rows.append([btn(f"👍 #{it['id']} ({it['votes']})", f"ideas:vote:{it['id']}")])
     rows.append([btn("⬅️ Назад", "info:back")])
     markup = ikb(*rows)
+    await show(event, text, markup)
     if isinstance(event, CallbackQuery):
         await event.answer()
-        await event.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    else:
-        await event.answer(text, reply_markup=markup, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data == "ideas:new")
