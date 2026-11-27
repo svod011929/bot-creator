@@ -6,6 +6,7 @@ import json
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,6 +16,7 @@ from child.db import fmt, now
 from child.mgram_proxy import check_completion, fetch_pending_result
 from child.money import as_minor, to_minor
 from child.templates import Setting, TemplateInfo
+from child.ui import btn, ikb, screen, show
 from child.withdrawals import is_owner
 
 INFO = TemplateInfo(
@@ -63,6 +65,20 @@ class TaskCreate(StatesGroup):
 
 class SubmitProof(StatesGroup):
     waiting = State()
+
+
+def admin_stats_extra(app) -> str:
+    """Дополнительная статистика для бота заданий в панели владельца."""
+    tasks = app.db.scalar("SELECT COUNT(*) FROM micro_tasks WHERE is_active=1") or 0
+    total_tasks = app.db.scalar("SELECT COUNT(*) FROM micro_tasks") or 0
+    pending = app.db.scalar("SELECT COUNT(*) FROM micro_submissions WHERE status='pending'") or 0
+    approved = app.db.scalar("SELECT COUNT(*) FROM micro_submissions WHERE status='approved'") or 0
+    rejected = app.db.scalar("SELECT COUNT(*) FROM micro_submissions WHERE status='rejected'") or 0
+    return (
+        f"\n\n📋 <b>Задания</b>\n"
+        f"Активных: {tasks} из {total_tasks}\n"
+        f"Заявок: ⏳ {pending} на проверке · ✅ {approved} одобрено · ❌ {rejected} отклонено"
+    )
 
 
 def menu_rows(app) -> list[list[str]]:
@@ -222,15 +238,18 @@ def build_router(app) -> Router:
             ok, _ = _can_do_task(app, uid, t)
             if ok:
                 available.append(t)
-        lines = ["📋 <b>Доступные задания</b>\n"]
-        kb = []
+        lines = []
+        kb_rows = []
         for t in available:
             types = _proof_types(t)
-            lines.append(
-                f"• {html.escape(t['title'])} — {fmt(t['reward'])} {app.s['currency']}"
-                f" ({_proof_types_label(types)})"
-            )
-            kb.append([InlineKeyboardButton(text=f"✅ {t['title'][:28]}", callback_data=f"mt:do:{t['id']}")])
+            desc = (t["description"] or "").strip() if "description" in t.keys() else ""
+            title_line = f"• <b>{html.escape(t['title'])}</b> — {fmt(t['reward'])} {app.s['currency']}"
+            title_line += f" ({_proof_types_label(types)})"
+            lines.append(title_line)
+            if desc:
+                short = html.escape(desc[:140] + ("…" if len(desc) > 140 else ""))
+                lines.append(f"  <i>{short}</i>")
+            kb_rows.append([btn(f"✅ {t['title'][:28]}", f"mt:do:{t['id']}")])
         if _mgram_enabled(app):
             done = {r["task_id"] for r in app.db.all(
                 "SELECT task_id FROM micro_mgram_done WHERE user_id=?", uid
@@ -257,19 +276,15 @@ def build_router(app) -> Router:
                 lines.append(
                     f"• 📡 {html.escape(str(btn_text))} — {fmt(reward)} {app.s['currency']} (MGRAM)"
                 )
-                kb.append([InlineKeyboardButton(
-                    text=f"📡 {str(btn_text)[:24]}",
-                    callback_data=f"mt:mgram:{tid}",
-                )])
-        if not available and not kb:
+                kb_rows.append([btn(f"📡 {str(btn_text)[:24]}", f"mt:mgram:{tid}")])
+        if not available and not kb_rows:
             extra = ""
-            if _mgram_enabled(app) and is_owner(app, uid) and len(lines) > 1:
-                extra = "\n\n" + "\n".join(lines[1:])
+            if _mgram_enabled(app) and is_owner(app, uid) and lines:
+                extra = "\n\n" + "\n".join(lines)
             await message.answer("Сейчас нет доступных заданий (или достигнут лимит заявок)." + extra)
             return
-        if not lines[1:]:
-            lines.append("Нет доступных заданий.")
-        await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb) if kb else None)
+        text = screen("Доступные задания", *lines) if lines else screen("Доступные задания", "Нет доступных заданий.")
+        await message.answer(text, reply_markup=ikb(*kb_rows) if kb_rows else None)
 
     @r.callback_query(F.data.startswith("mt:do:"))
     async def start_do(cb: CallbackQuery, state: FSMContext) -> None:
@@ -288,12 +303,20 @@ def build_router(app) -> Router:
         await state.set_state(SubmitProof.waiting)
         await state.update_data(task_id=tid)
         types = _proof_types(task)
-        await cb.message.answer(
-            f"Задание: <b>{html.escape(task['title'])}</b>\n"
-            f"Награда: {fmt(task['reward'])} {app.s['currency']}\n"
-            f"Доказательства: {_proof_types_label(types)}\n\n"
-            "Пришлите подходящее доказательство или /cancel."
-        )
+        desc = (task["description"] or "").strip() if "description" in task.keys() else ""
+        main = [
+            f"Награда: {fmt(task['reward'])} {app.s['currency']}",
+            f"Доказательства: {_proof_types_label(types)}",
+        ]
+        if task["repeat_mode"] == "once":
+            main.append("Можно выполнить один раз.")
+        elif task["repeat_mode"] == "repeatable":
+            cd = task["cooldown_hours"]
+            main.append("Повторяемое" + (f", кулдаун {cd} ч" if cd else ""))
+        det = [html.escape(desc)] if desc else None
+        text = screen(html.escape(task["title"]), *main, details_lines=det, expandable=bool(desc))
+        text += "\n\nПришлите подходящее доказательство или /cancel."
+        await cb.message.answer(text)
         await cb.answer()
 
     @r.message(SubmitProof.waiting)
@@ -429,15 +452,17 @@ def build_router(app) -> Router:
             message.from_user.id
         )
         if not rows:
-            await message.answer("У вас пока нет заявок.")
+            await message.answer(screen("Мои задания", "У вас пока нет заявок."))
             return
-        lines = ["📄 <b>Мои задания</b>\n"]
+        status_emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
+        lines = []
         for s in rows:
-            lines.append(
-                f"• {html.escape(s['title'])} — {s['status']}"
-                + (f"\n  Комментарий: {html.escape(s['comment'])}" if s["comment"] else "")
-            )
-        await message.answer("\n".join(lines))
+            mark = status_emoji.get(s["status"], "•")
+            line = f"{mark} {html.escape(s['title'])} — {s['status']}"
+            if s["comment"]:
+                line += f"\n  Комментарий: {html.escape(s['comment'])}"
+            lines.append(line)
+        await message.answer(screen("Мои задания", *lines))
 
     @r.message(F.text == BTN_TOP)
     async def top(message: Message) -> None:
@@ -446,12 +471,11 @@ def build_router(app) -> Router:
             "JOIN users u ON u.id=s.user_id WHERE s.status='approved' "
             "GROUP BY s.user_id ORDER BY cnt DESC LIMIT 10"
         )
-        lines = ["🏆 <b>Топ по выполненным заданиям</b>\n"]
-        for i, row in enumerate(rows, 1):
-            lines.append(f"{i}. {html.escape(row['full_name'] or '—')} — {row['cnt']}")
-        if len(lines) == 1:
-            lines.append("Пока пусто.")
-        await message.answer("\n".join(lines))
+        if not rows:
+            await message.answer(screen("Топ по выполненным заданиям", "Пока пусто."))
+            return
+        lines = [f"{i}. {html.escape(row['full_name'] or '—')} — {row['cnt']}" for i, row in enumerate(rows, 1)]
+        await message.answer(screen("Топ по выполненным заданиям", *lines))
 
     @r.message(F.text == BTN_INVITE)
     async def invite(message: Message) -> None:
@@ -473,11 +497,16 @@ def build_admin_router(app) -> Router:
     r.callback_query.filter(LiveOwnerFilter(app))
 
     def tasks_kb():
-        rows = app.db.all("SELECT id, title, is_active FROM micro_tasks ORDER BY id DESC LIMIT 30")
+        rows = app.db.all("SELECT id, title, is_active, description FROM micro_tasks ORDER BY id DESC LIMIT 30")
         kb = [[InlineKeyboardButton(text="➕ Создать задание", callback_data="mt:create")]]
         for t in rows:
             mark = "✅" if t["is_active"] else "⏸"
-            kb.append([InlineKeyboardButton(text=f"{mark} {t['title'][:40]}", callback_data=f"mt:toggle:{t['id']}")])
+            title = t["title"][:32]
+            desc = (t["description"] or "").strip() if "description" in t.keys() else ""
+            btn_text = f"{mark} {title}"
+            if desc:
+                btn_text += f" · {desc[:18]}…" if len(desc) > 18 else f" · {desc}"
+            kb.append([InlineKeyboardButton(text=btn_text[:60], callback_data=f"mt:view:{t['id']}")])
         return InlineKeyboardMarkup(inline_keyboard=kb)
 
     @r.callback_query(F.data == "mt:admin:tasks")
@@ -485,7 +514,40 @@ def build_admin_router(app) -> Router:
         if not is_owner(app, cb.from_user.id):
             await cb.answer("Нет доступа", show_alert=True)
             return
-        await cb.message.answer("📋 <b>Задания</b>", reply_markup=tasks_kb())
+        text = "📋 <b>Задания</b>\n\nНажмите на задание, чтобы увидеть описание и управлять."
+        await cb.message.answer(text, reply_markup=tasks_kb())
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("mt:view:"))
+    async def view_task(cb: CallbackQuery) -> None:
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        tid = _callback_int(cb.data, prefix="mt:view:")
+        if tid is None:
+            await cb.answer("Задание недоступно", show_alert=True)
+            return
+        task = app.db.one("SELECT * FROM micro_tasks WHERE id=?", tid)
+        if not task:
+            await cb.answer("Задание не найдено", show_alert=True)
+            return
+        desc = (task["description"] or "").strip() if "description" in task.keys() else ""
+        types = _proof_types(task)
+        main = [
+            f"Награда: {fmt(task['reward'])} {app.s['currency']}",
+            f"Статус: {'активно' if task['is_active'] else 'на паузе'}",
+            f"Доказательства: {_proof_types_label(types)}",
+            f"Повтор: {task['repeat_mode']}" + (
+                f" (кулдаун {task['cooldown_hours']} ч)" if task['repeat_mode'] == 'repeatable' else ""
+            ),
+        ]
+        det = [html.escape(desc)] if desc else None
+        text = screen(html.escape(task["title"]), *main, details_lines=det, expandable=bool(desc))
+        kb = ikb(
+            [btn("⏸/▶️ Вкл/выкл", f"mt:toggle:{tid}")],
+            [btn("⬅️ К списку", "mt:admin:tasks")],
+        )
+        await show(cb, text, kb)
         await cb.answer()
 
     @r.callback_query(F.data == "mt:create")
@@ -535,23 +597,65 @@ def build_admin_router(app) -> Router:
             return
         await state.update_data(proof_types=types)
         await state.set_state(TaskCreate.approval)
-        await message.answer("Режим проверки: manual или auto")
+        await message.answer(
+            "Режим проверки:",
+            reply_markup=ikb(
+                [btn("Ручная (manual)", "mt:appr:manual"), btn("Авто (auto)", "mt:appr:auto")],
+            ),
+        )
+
+    @r.callback_query(F.data.startswith("mt:appr:"), StateFilter(TaskCreate.approval))
+    async def step_approval_btn(cb: CallbackQuery, state: FSMContext) -> None:
+        mode = cb.data.split(":")[-1]
+        if mode not in {"manual", "auto"}:
+            await cb.answer()
+            return
+        await state.update_data(approval_mode=mode)
+        await state.set_state(TaskCreate.repeat)
+        await cb.message.edit_text(
+            "Повторяемость:",
+            reply_markup=ikb(
+                [btn("Один раз (once)", "mt:rep:once"), btn("Повторяемое", "mt:rep:repeatable")],
+            ),
+        )
+        await cb.answer()
 
     @r.message(TaskCreate.approval)
     async def step_approval(message: Message, state: FSMContext) -> None:
         mode = message.text.strip().lower()
         if mode not in {"manual", "auto"}:
-            await message.answer("Напишите manual или auto")
+            await message.answer("Напишите manual или auto, либо используйте кнопки.")
             return
         await state.update_data(approval_mode=mode)
         await state.set_state(TaskCreate.repeat)
-        await message.answer("Повторяемость: once или repeatable")
+        await message.answer(
+            "Повторяемость:",
+            reply_markup=ikb(
+                [btn("Один раз (once)", "mt:rep:once"), btn("Повторяемое", "mt:rep:repeatable")],
+            ),
+        )
+
+    @r.callback_query(F.data.startswith("mt:rep:"), StateFilter(TaskCreate.repeat))
+    async def step_repeat_btn(cb: CallbackQuery, state: FSMContext) -> None:
+        mode = cb.data.split(":")[-1]
+        if mode not in {"once", "repeatable"}:
+            await cb.answer()
+            return
+        await state.update_data(repeat_mode=mode)
+        if mode == "repeatable":
+            await state.set_state(TaskCreate.cooldown)
+            await cb.message.edit_text("Кулдаун в часах (0 — без кулдауна):")
+        else:
+            await state.update_data(cooldown_hours=0)
+            await state.set_state(TaskCreate.preview)
+            await _show_preview(cb.message, state)
+        await cb.answer()
 
     @r.message(TaskCreate.repeat)
     async def step_repeat(message: Message, state: FSMContext) -> None:
         mode = message.text.strip().lower()
         if mode not in {"once", "repeatable"}:
-            await message.answer("Напишите once или repeatable")
+            await message.answer("Напишите once или repeatable, либо используйте кнопки.")
             return
         await state.update_data(repeat_mode=mode)
         if mode == "repeatable":
@@ -577,20 +681,21 @@ def build_admin_router(app) -> Router:
 
     async def _show_preview(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
-        text = (
-            f"<b>Предпросмотр</b>\n"
-            f"Название: {html.escape(data['title'])}\n"
-            f"Описание: {html.escape(data.get('description') or '—')}\n"
-            f"Награда: {fmt(data['reward'])}\n"
-            f"Доказательства: {_proof_types_label(data['proof_types'])}\n"
-            f"Проверка: {data['approval_mode']}\n"
-            f"Повтор: {data['repeat_mode']}"
-            + (f" (кулдаун {data.get('cooldown_hours', 0)} ч)" if data['repeat_mode'] == 'repeatable' else "")
+        desc = data.get("description") or "—"
+        main = [
+            f"Название: {html.escape(data['title'])}",
+            f"Награда: {fmt(data['reward'])}",
+            f"Доказательства: {_proof_types_label(data['proof_types'])}",
+            f"Проверка: {data['approval_mode']}",
+            f"Повтор: {data['repeat_mode']}" + (
+                f" (кулдаун {data.get('cooldown_hours', 0)} ч)" if data['repeat_mode'] == 'repeatable' else ""
+            ),
+        ]
+        text = screen("Предпросмотр", *main, details_lines=[html.escape(desc)] if desc != "—" else None, expandable=True)
+        kb = ikb(
+            [btn("💾 Сохранить", "mt:save", style="success")],
+            [btn("❌ Отмена", "mt:cancel", style="danger")],
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💾 Сохранить", callback_data="mt:save")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="mt:cancel")],
-        ])
         await message.answer(text, reply_markup=kb)
 
     @r.callback_query(F.data == "mt:save", StateFilter(TaskCreate.preview))
@@ -633,15 +738,41 @@ def build_admin_router(app) -> Router:
             await cb.answer("Задание недоступно", show_alert=True)
             return
         app.db.exec("UPDATE micro_tasks SET is_active = 1 - is_active WHERE id=?", tid)
-        await cb.message.edit_reply_markup(reply_markup=tasks_kb())
-        await cb.answer()
+        # Refresh the detail view if we came from it, otherwise refresh list markup
+        task = app.db.one("SELECT * FROM micro_tasks WHERE id=?", tid)
+        if task and cb.message and cb.message.text and not cb.message.text.startswith("📋"):
+            desc = (task["description"] or "").strip() if "description" in task.keys() else ""
+            types = _proof_types(task)
+            main = [
+                f"Награда: {fmt(task['reward'])} {app.s['currency']}",
+                f"Статус: {'активно' if task['is_active'] else 'на паузе'}",
+                f"Доказательства: {_proof_types_label(types)}",
+                f"Повтор: {task['repeat_mode']}" + (
+                    f" (кулдаун {task['cooldown_hours']} ч)" if task['repeat_mode'] == 'repeatable' else ""
+                ),
+            ]
+            det = [html.escape(desc)] if desc else None
+            text = screen(html.escape(task["title"]), *main, details_lines=det, expandable=bool(desc))
+            kb = ikb(
+                [btn("⏸/▶️ Вкл/выкл", f"mt:toggle:{tid}")],
+                [btn("⬅️ К списку", "mt:admin:tasks")],
+            )
+            try:
+                await cb.message.edit_text(text, reply_markup=kb)
+            except TelegramBadRequest:
+                pass
+        else:
+            try:
+                await cb.message.edit_reply_markup(reply_markup=tasks_kb())
+            except TelegramBadRequest:
+                pass
+        await cb.answer("Обновлено")
 
     @r.callback_query(F.data.startswith("mt:admin:queue:"))
     async def queue(cb: CallbackQuery) -> None:
         if not is_owner(app, cb.from_user.id):
             await cb.answer("Нет доступа", show_alert=True)
             return
-        # Авто-отклонение старых заявок (то же правило, что и у фоновой задачи)
         try:
             hours = int(app.s.get("auto_reject_hours") or 48)
         except (TypeError, ValueError):
@@ -651,31 +782,70 @@ def build_admin_router(app) -> Router:
         if page is None:
             await cb.answer("Очередь недоступна", show_alert=True)
             return
+        PAGE = 8
+        total = app.db.scalar("SELECT COUNT(*) FROM micro_submissions WHERE status='pending'") or 0
         rows = app.db.all(
-            "SELECT s.*, t.title, u.full_name FROM micro_submissions s "
+            "SELECT s.id, s.user_id, s.proof, t.title, u.full_name FROM micro_submissions s "
             "JOIN micro_tasks t ON t.id=s.task_id "
             "JOIN users u ON u.id=s.user_id "
-            "WHERE s.status='pending' ORDER BY s.id LIMIT 10 OFFSET ?",
-            page * 10
+            "WHERE s.status='pending' ORDER BY s.id LIMIT ? OFFSET ?",
+            PAGE, page * PAGE,
         )
         if not rows:
-            await cb.message.answer("Очередь пуста.")
+            await show(cb, screen("Очередь заявок", "Пусто."), ikb([btn("⬅️ Назад", "adm:main")]))
             await cb.answer()
             return
+        pages = max(1, -(-total // PAGE))
+        lines = [f"На проверке: {total} · стр. {page + 1}/{pages}"]
+        kb_rows = []
         for s in rows:
-            text = (
-                f"Заявка #{s['id']}\n"
-                f"Пользователь: {html.escape(s['full_name'] or str(s['user_id']))}\n"
-                f"Задание: {html.escape(s['title'])}\n"
-                f"Доказательство: {html.escape(str(s['proof'])[:500])}"
-            )
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="✅ Одобрить", callback_data=f"mt:ok:{s['id']}"),
-                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mt:no:{s['id']}"),
-                ]
-            ])
-            await cb.message.answer(text, reply_markup=kb)
+            name = s["full_name"] or str(s["user_id"])
+            short = f"#{s['id']} {s['title'][:18]} — {name[:12]}"
+            kb_rows.append([btn(short[:40], f"mt:qview:{s['id']}")])
+        nav = []
+        if page > 0:
+            nav.append(btn("⬅️", f"mt:admin:queue:{page - 1}"))
+        if (page + 1) * PAGE < total:
+            nav.append(btn("➡️", f"mt:admin:queue:{page + 1}"))
+        if nav:
+            kb_rows.append(nav)
+        kb_rows.append([btn("⬅️ Назад", "adm:main")])
+        await show(cb, screen("Очередь заявок", *lines), ikb(*kb_rows))
+        await cb.answer()
+
+    @r.callback_query(F.data.startswith("mt:qview:"))
+    async def queue_view(cb: CallbackQuery) -> None:
+        if not is_owner(app, cb.from_user.id):
+            await cb.answer("Нет доступа", show_alert=True)
+            return
+        sid = _callback_int(cb.data, prefix="mt:qview:")
+        if sid is None:
+            await cb.answer("Заявка недоступна", show_alert=True)
+            return
+        s = app.db.one(
+            "SELECT s.*, t.title, u.full_name FROM micro_submissions s "
+            "JOIN micro_tasks t ON t.id=s.task_id "
+            "JOIN users u ON u.id=s.user_id WHERE s.id=?",
+            sid,
+        )
+        if not s or s["status"] != "pending":
+            await cb.answer("Уже обработано", show_alert=True)
+            return
+        name = html.escape(s["full_name"] or str(s["user_id"]))
+        proof = html.escape(str(s["proof"] or "")[:800])
+        text = screen(
+            f"Заявка #{s['id']}",
+            f"Пользователь: {name}",
+            f"Задание: {html.escape(s['title'])}",
+            details_lines=[f"Доказательство:\n{proof}"] if proof else None,
+            expandable=True,
+        )
+        kb = ikb(
+            [btn("✅ Одобрить", f"mt:ok:{sid}", style="success"),
+             btn("❌ Отклонить", f"mt:no:{sid}", style="danger")],
+            [btn("⬅️ К очереди", "mt:admin:queue:0")],
+        )
+        await show(cb, text, kb)
         await cb.answer()
 
     @r.callback_query(F.data.startswith("mt:ok:"))
