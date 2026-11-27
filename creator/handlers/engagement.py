@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 from creator.content import ContentError, _guard
 from creator.engagement import parse, read_owned, render
 from creator.services import Ctx
+from creator.ui import NO_PREVIEW
 
 router = Router(name="engagement-reports")
 
@@ -35,7 +36,7 @@ async def show(cb: CallbackQuery, state: FSMContext, ctx: Ctx):
             _guard(ctx, row, cb.from_user.id)
         text, keyboard = render(bot_id, data, section=section, days=days)
         try:
-            await cb.message.edit_text(text, reply_markup=keyboard)
+            await cb.message.edit_text(text, reply_markup=keyboard, link_preview_options=NO_PREVIEW)
         except TelegramBadRequest as exc:
             if "message is not modified" not in exc.message.lower():
                 raise ContentError("Экран не отправлен. Откройте аналитику заново.") from None

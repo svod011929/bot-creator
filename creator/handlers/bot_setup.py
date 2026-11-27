@@ -14,6 +14,7 @@ from creator.bot_setup import CHANNEL_KEYS, TOKEN_LIKE, load_snapshot, view
 from creator.keyboards import bot_card_kb, cancel_kb
 from creator.services import Ctx
 from creator.states import BotEdit
+from creator.ui import NO_PREVIEW
 
 router = Router(name="bot_setup")
 REQUEST = re.compile(
@@ -46,15 +47,16 @@ def _may_leave(current, data, row, uid, action) -> bool:
 
 async def _deliver(cb: CallbackQuery, text, markup) -> bool:
     try:
-        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+        await cb.message.edit_text(text, reply_markup=markup, link_preview_options=NO_PREVIEW)
         return True
     except TelegramBadRequest as exc:
         if "message is not modified" in exc.message.lower():
             return True
+        await cb.answer("Не удалось открыть экран. Откройте «Мои боты» заново.", show_alert=True)
+        return False
     except TelegramAPIError:
-        pass
-    await cb.answer("Не удалось открыть экран. Откройте «Мои боты» заново.", show_alert=True)
-    return False
+        await cb.answer("Не удалось открыть экран. Откройте «Мои боты» заново.", show_alert=True)
+        return False
 
 
 async def legacy_settings(cb: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:

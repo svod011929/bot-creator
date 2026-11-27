@@ -17,6 +17,7 @@ from creator.content import KINDS, ContentError, decode, open_content
 from creator.keyboards import BTN_CONTENT
 from creator.services import Ctx
 from creator.states import ContentInput
+from creator.ui import NO_PREVIEW
 
 router = Router(name="creator-content")
 WRITING = {"new", "resume", "edit", "field", "correct", "input", "sources", "pick", "picked"}
@@ -133,15 +134,16 @@ def perform(c, action, args):
 
 async def deliver(cb, text, keyboard):
     try:
-        await cb.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+        await cb.message.edit_text(text, reply_markup=keyboard, link_preview_options=NO_PREVIEW)
         return True
     except TelegramBadRequest as exc:
         if "message is not modified" in exc.message.lower():
             return True
+        await cb.answer("Экран не отправлен. Сохранённая форма доступна через «Продолжить».", show_alert=True)
+        return False
     except TelegramAPIError:
-        pass
-    await cb.answer("Экран не отправлен. Сохранённая форма доступна через «Продолжить».", show_alert=True)
-    return False
+        await cb.answer("Экран не отправлен. Сохранённая форма доступна через «Продолжить».", show_alert=True)
+        return False
 
 
 def private(event):
